@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Laser Ablation Debris Stabilizer</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="sim-shell" aria-label="Laser ablation debris stabilizer">
+      <canvas id="game" aria-label="Laser ablation shooting simulator"></canvas>
+
+      <section class="hud hud-left" aria-label="Mission telemetry">
+        <div class="brand-row">
+          <span class="brand-mark">LABS</span>
+          <span class="status-pill" id="phaseLabel">ACQUIRE</span>
+        </div>
+        <div class="meter">
+          <div class="meter-label">
+            <span>ENERGY</span>
+            <b id="energyText">100%</b>
+          </div>
+          <div class="bar"><i id="energyBar"></i></div>
+        </div>
+        <div class="meter">
+          <div class="meter-label">
+            <span>THERMAL</span>
+            <b id="heatText">0%</b>
+          </div>
+          <div class="bar danger"><i id="heatBar"></i></div>
+        </div>
+        <div class="meter">
+          <div class="meter-label">
+            <span>STABILITY</span>
+            <b id="stableText">0%</b>
+          </div>
+          <div class="bar success"><i id="stableBar"></i></div>
+        </div>
+      </section>
+
+      <section class="hud hud-right" aria-label="Target telemetry">
+        <div class="readout">
+          <span>ANGULAR RATE</span>
+          <b id="spinText">0.00 rad/s</b>
+        </div>
+        <div class="readout">
+          <span>DELTA-V</span>
+          <b id="dvText">0.00 m/s</b>
+        </div>
+        <div class="readout">
+          <span>REMOVAL</span>
+          <b id="removeText">0%</b>
+        </div>
+        <div class="readout">
+          <span>SCORE</span>
+          <b id="scoreText">000000</b>
+        </div>
+        <div class="readout">
+          <span>ORBIT</span>
+          <b id="orbitText">DAY 000&deg;</b>
+        </div>
+        <div class="readout">
+          <span>SUN</span>
+          <b id="sunText">100%</b>
+        </div>
+      </section>
+
+      <section class="hud hud-bottom" aria-label="Controls and mission state">
+        <button id="pauseButton" type="button" title="Pause or resume">II</button>
+        <button id="resetButton" type="button" title="Reset run">R</button>
+        <button id="targetButton" type="button" title="Cycle target type (T)">DEBRIS</button>
+        <div class="mode-strip" aria-label="Mission sequence">
+          <span id="stepDespin">
+            <em>1 · DESPIN</em>
+            <small>回転を止める</small>
+          </span>
+          <span id="stepStabilize">
+            <em>2 · STABILIZE</em>
+            <small>姿勢を2秒保持</small>
+          </span>
+          <span id="stepRemove">
+            <em>3 · REMOVE</em>
+            <small>軌道へ押し出す</small>
+          </span>
+        </div>
+        <div class="keyline" id="guidanceText">GUIDANCE VECTOR NOMINAL</div>
+      </section>
+
+      <div class="overlay" id="introOverlay" role="dialog" aria-modal="true" aria-labelledby="introTitle">
+        <div class="overlay-card">
+          <div class="overlay-eyebrow">LASER ABLATION DEBRIS STABILIZER</div>
+          <h1 id="introTitle">MISSION OBJECTIVE</h1>
+          <p class="overlay-lede">回転する宇宙デブリをレーザーで安定化し、回収軌道へ押し出せ。</p>
+          <ol class="overlay-steps">
+            <li>
+              <b>1. DESPIN</b>
+              <span>デブリの<u>端</u>にレーザーを当てて回転を止める。<br>ANGULAR RATE を 0.16 rad/s 未満に。</span>
+            </li>
+            <li>
+              <b>2. STABILIZE</b>
+              <span>低速のまま約2秒キープ → STABILITY 100% で姿勢ロック。</span>
+            </li>
+            <li>
+              <b>3. REMOVE</b>
+              <span>レーザーで<u>逆行</u>方向にΔv → 軌道が下がりデブリは<u>地球方向(下)</u>へドリフト。<br>姿勢ロック中に下方の点線(GOAL)へ到達すればクリア。<br><b style="color:#ff5268">⚠ 回転を止めずに高度を下げ切ると<u>大気圏で空中分解</u>=失敗</b></span>
+            </li>
+          </ol>
+          <div class="overlay-controls">
+            <span><kbd>クリック / タップ</kbd>でレーザー発射</span>
+            <span><kbd>右ドラッグ</kbd>で視点回転</span>
+            <span><kbd>P</kbd>一時停止 / <kbd>R</kbd>リセット / <kbd>T</kbd>ターゲット切替</span>
+          </div>
+          <button id="startButton" type="button">START MISSION</button>
+        </div>
+      </div>
+
+      <div class="overlay overlay-result" id="winOverlay" role="dialog" aria-modal="true" hidden>
+        <div class="overlay-card overlay-card-result">
+          <div class="overlay-eyebrow success">MISSION CLEARED</div>
+          <h1>DEBRIS TRANSFER CONFIRMED</h1>
+          <p class="overlay-lede">デブリを回収軌道へ送出。任務完了。</p>
+          <div class="overlay-stats">
+            <div><span>FINAL SCORE</span><b id="winScore">000000</b></div>
+            <div><span>ENERGY LEFT</span><b id="winEnergy">0%</b></div>
+          </div>
+          <button id="retryButton" type="button">NEW RUN</button>
+        </div>
+      </div>
+
+      <div class="overlay overlay-result" id="failOverlay" role="dialog" aria-modal="true" hidden>
+        <div class="overlay-card overlay-card-result overlay-card-fail">
+          <div class="overlay-eyebrow danger">MISSION FAILED</div>
+          <h1>UNCONTROLLED REENTRY</h1>
+          <p class="overlay-lede" id="failReason">回転を止めないまま大気圏へ突入 — デブリは回収不能。</p>
+          <button id="failRetryButton" type="button">RETRY</button>
+        </div>
+      </div>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>
