@@ -100,7 +100,7 @@ earthTexture.onload = () => {
 earthTexture.onerror = () => {
   earthTextureData = null;
 };
-earthTexture.src = "earth_texture.jpg";
+earthTexture.src = "earth_texture.jpg?v=8k";
 
 const pointer = {
   x: 0,
@@ -1192,15 +1192,35 @@ function renderEarthSphere() {
       let u = lon / TAU + 0.5 + lonOffset;
       u = u - Math.floor(u);
       const v = 0.5 - latClamped / Math.PI;
-      const tx = (u * tw) | 0;
-      const ty = (v * th) | 0;
-      const ti = (ty * tw + tx) * 4;
+      // Bilinear sampling: 4 neighbours weighted by sub-pixel offsets — eliminates
+      // the blocky nearest-neighbour aliasing that dominated at 2K texture scale.
+      const fx = u * tw - 0.5;
+      const fy = v * th - 0.5;
+      const x0 = Math.floor(fx);
+      const y0 = Math.floor(fy);
+      const wx = fx - x0;
+      const wy = fy - y0;
+      const x0w = ((x0 % tw) + tw) % tw;
+      const x1w = ((x0 + 1) % tw + tw) % tw;
+      const y0c = y0 < 0 ? 0 : (y0 > th - 1 ? th - 1 : y0);
+      const y1c = (y0 + 1) < 0 ? 0 : ((y0 + 1) > th - 1 ? th - 1 : (y0 + 1));
+      const i00 = (y0c * tw + x0w) * 4;
+      const i10 = (y0c * tw + x1w) * 4;
+      const i01 = (y1c * tw + x0w) * 4;
+      const i11 = (y1c * tw + x1w) * 4;
+      const w00 = (1 - wx) * (1 - wy);
+      const w10 = wx * (1 - wy);
+      const w01 = (1 - wx) * wy;
+      const w11 = wx * wy;
+      const r = td[i00] * w00 + td[i10] * w10 + td[i01] * w01 + td[i11] * w11;
+      const g = td[i00 + 1] * w00 + td[i10 + 1] * w10 + td[i01 + 1] * w01 + td[i11 + 1] * w11;
+      const bl = td[i00 + 2] * w00 + td[i10 + 2] * w10 + td[i01 + 2] * w01 + td[i11 + 2] * w11;
       const sunDot = nx * sunWX + ny * sunWY + nz * sunWZ;
       const lit = sunDot * 1.05 + 0.08;
       const litClamp = lit > 1 ? 1 : (lit < 0.06 ? 0.06 : lit);
-      data[di]     = td[ti]     * litClamp;
-      data[di + 1] = td[ti + 1] * litClamp;
-      data[di + 2] = td[ti + 2] * litClamp;
+      data[di]     = r * litClamp;
+      data[di + 1] = g * litClamp;
+      data[di + 2] = bl * litClamp;
       data[di + 3] = 255;
     }
   }
