@@ -34,7 +34,7 @@ Orbital debris removal simulator — laser ablation + HCW (Hill-Clohessy-Wiltshi
 - **HCW (Hill-Clohessy-Wiltshire) equations**: チェイサー衛星を原点とする LVLH フレームでの相対運動を記述
 - **Laser ablation impulse**: ヒット点の表面法線方向に推力を付与、デブリ表面位置から `r × F` のトルクで姿勢が変化
 - **Sun-synchronous orbit**: 高度 600 km、傾斜角 97.8°、LTAN 10:30、β=22°、周期 90 秒（ゲーム時間）
-- **Earth texture**: NASA Blue Marble equirectangular をレイトレースで球面サンプリング
+- **Earth texture**: NASA Blue Marble (8192×4096 equirectangular) をレイトレースで球面サンプリング、バイリニア補間でアンチエイリアシング
 
 ## ローカルで動かす
 
@@ -52,5 +52,5 @@ python3 -m http.server 8765
 index.html        # UI 構造
 styles.css        # HUD / オーバーレイの装飾
 game.js           # ゲームロジック・物理・描画
-earth_texture.jpg # NASA Blue Marble (equirectangular)
+earth_texture.jpg # NASA Blue Marble (8192x4096 equirectangular, ~6MB)
 ```
