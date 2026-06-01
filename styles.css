@@ -82,13 +82,19 @@ button {
   transform: translateX(-50%);
   padding: 9px 10px;
   display: grid;
-  grid-template-columns: 40px 40px 96px 1fr minmax(170px, 230px);
+  grid-template-columns: 40px 40px 92px 84px 1fr minmax(150px, 210px);
   gap: 9px;
   align-items: center;
 }
 
 #targetButton {
-  width: 96px !important;
+  width: 92px !important;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+#difficultyButton {
+  width: 84px !important;
   font-size: 11px;
   letter-spacing: 0.5px;
 }
@@ -459,16 +465,24 @@ button {
   .hud-bottom {
     bottom: 12px;
     width: calc(100vw - 24px);
-    grid-template-columns: 38px 38px 86px 1fr;
+    grid-template-columns: 34px 34px 70px 66px 1fr;
+    gap: 6px;
   }
 
   #targetButton {
-    width: 86px !important;
-    font-size: 10px;
+    width: 70px !important;
+    font-size: 9.5px;
+    letter-spacing: 0;
+  }
+
+  #difficultyButton {
+    width: 66px !important;
+    font-size: 9.5px;
+    letter-spacing: 0;
   }
 
   .hud-bottom button {
-    width: 38px;
+    width: 34px;
   }
 
   .keyline {
