@@ -28,6 +28,7 @@ const ui = {
   pauseButton: document.getElementById("pauseButton"),
   resetButton: document.getElementById("resetButton"),
   targetButton: document.getElementById("targetButton"),
+  difficultyButton: document.getElementById("difficultyButton"),
   stepDespin: document.getElementById("stepDespin"),
   stepStabilize: document.getElementById("stepStabilize"),
   stepRemove: document.getElementById("stepRemove"),
@@ -168,9 +169,29 @@ function vanishingPoint() {
   return { x: width * 0.5, y: height * 0.42 };
 }
 
-const TARGET_TYPES = ["debris", "boxwing"];
-const TARGET_LABELS = { debris: "DEBRIS", boxwing: "BOX-WING" };
+const TARGET_TYPES = ["debris", "boxwing", "rocket"];
+const TARGET_LABELS = { debris: "DEBRIS", boxwing: "BOX-WING", rocket: "ROCKET" };
 let currentTargetType = "debris";
+
+// Difficulty scales the target's initial tumble (angular rates) and relative
+// drift speed, plus a score multiplier. The main lever is the spin rate, so a
+// HARD target arrives spinning ~3x faster than an EASY one.
+const DIFFICULTY_TYPES = ["easy", "normal", "hard"];
+const DIFFICULTY_LABELS = { easy: "EASY", normal: "NORMAL", hard: "HARD" };
+const DIFFICULTY = {
+  easy:   { spin: 0.55, drift: 0.65, scoreMul: 0.7 },
+  normal: { spin: 1.0,  drift: 1.0,  scoreMul: 1.0 },
+  hard:   { spin: 1.7,  drift: 1.4,  scoreMul: 1.6 }
+};
+let currentDifficulty = "normal";
+
+// Per-target baseline dynamics (at NORMAL difficulty). Difficulty multiplies the
+// spin and drift fields; mass/inertia and the resting attitude stay fixed.
+const TARGET_BASE = {
+  debris:  { vx: -7,   vy: 2,   angle: -0.42, pitch: 0.36, roll: -0.22, omega: 1.72, omegaPitch: 0.34, omegaRoll: -0.28, mass: 220, inertia: 240000 },
+  boxwing: { vx: -3,   vy: 1,   angle: -0.18, pitch: 0.12, roll: -0.05, omega: 0.95, omegaPitch: 0.18, omegaRoll: -0.12, mass: 95,  inertia: 165000 },
+  rocket:  { vx: -4.5, vy: 1.5, angle: -0.30, pitch: 0.06, roll: 0.42,  omega: 1.05, omegaPitch: 0.07, omegaRoll: 0.34,  mass: 320, inertia: 300000 }
+};
 
 function makeBoxWingShape(scale) {
   // Top-down outline used for laser ray-polygon intersection.
@@ -282,6 +303,73 @@ function makeBoxWingMesh(scale) {
   return { verts, faces };
 }
 
+function makeRocketShape(scale) {
+  // Top-down silhouette of a spent upper stage: long cylindrical hull tapering to
+  // a forward dome, with a flared engine bell at the aft end.
+  const r = scale * 0.30;
+  const fwd = scale * 0.74;
+  const aft = -scale * 0.72;
+  const nozzle = -scale * 1.0;
+  const rBell = r * 0.66;
+  return [
+    { x: scale * 0.98, y:  r * 0.38 },  // forward dome tip (top)
+    { x: fwd,          y:  r },          // hull forward (top)
+    { x: aft,          y:  r },          // hull aft (top)
+    { x: nozzle,       y:  rBell },      // nozzle lip (top)
+    { x: nozzle,       y: -rBell },      // nozzle lip (bottom)
+    { x: aft,          y: -r },          // hull aft (bottom)
+    { x: fwd,          y: -r },          // hull forward (bottom)
+    { x: scale * 0.98, y: -r * 0.38 }    // forward dome tip (bottom)
+  ];
+}
+
+function makeRocketMesh(scale) {
+  // Body of revolution about the local X axis (the long axis), assembled from
+  // rings of vertices joined by quad "tubes". No backface culling is needed —
+  // drawDebris paints faces back-to-front.
+  const verts = [];
+  const faces = [];
+  const seg = 16;
+  const push = (x, y, z) => { verts.push({ x, y, z }); return verts.length - 1; };
+  const ring = (x, r) => {
+    const idx = [];
+    for (let i = 0; i < seg; i++) {
+      const a = (i / seg) * TAU;
+      idx.push(push(x, Math.cos(a) * r, Math.sin(a) * r));
+    }
+    return idx;
+  };
+  const tube = (a, b, kind, shade = 0.95) => {
+    for (let i = 0; i < seg; i++) {
+      const n = (i + 1) % seg;
+      faces.push({ indices: [a[i], a[n], b[n], b[i]], shade, kind });
+    }
+  };
+
+  const r = scale * 0.30;          // hull radius
+  const rThroat = r * 0.42;        // engine throat radius
+  const rBell = r * 0.66;          // engine bell lip radius
+
+  // X stations, forward (+) to aft (-).
+  const domeTip = ring(scale * 0.98, r * 0.38);
+  const fwd     = ring(scale * 0.74, r);
+  const bandF   = ring(scale * 0.12, r * 1.06);
+  const bandA   = ring(-scale * 0.06, r * 1.06);
+  const aft     = ring(-scale * 0.72, r);
+  const throat  = ring(-scale * 0.72, rThroat);
+  const bell    = ring(-scale * 1.0, rBell);
+
+  faces.push({ indices: [...domeTip], shade: 1.0, kind: "rocket-dome" });   // forward cap
+  tube(domeTip, fwd, "rocket-hull", 0.92);                                  // forward taper
+  tube(fwd, bandF, "rocket-hull");                                          // forward hull
+  tube(bandF, bandA, "rocket-band", 0.82);                                  // interstage band
+  tube(bandA, aft, "rocket-hull");                                          // aft hull
+  tube(aft, throat, "rocket-mount", 0.7);                                   // engine mounting plate (annulus)
+  faces.push({ indices: [...throat].reverse(), shade: 0.36, kind: "rocket-mount" }); // close the throat
+  tube(throat, bell, "nozzle", 0.78);                                       // flared engine bell
+  return { verts, faces };
+}
+
 function buildTarget(type, radius) {
   if (type === "boxwing") {
     const scale = radius * 1.1;
@@ -289,6 +377,14 @@ function buildTarget(type, radius) {
       shape: makeBoxWingShape(scale),
       mesh: makeBoxWingMesh(scale),
       kind: "boxwing"
+    };
+  }
+  if (type === "rocket") {
+    const scale = radius;
+    return {
+      shape: makeRocketShape(scale),
+      mesh: makeRocketMesh(scale),
+      kind: "rocket"
     };
   }
   const shape = makeDebrisShape().map((p) => ({ x: (p.x * radius) / 78, y: (p.y * radius) / 78 }));
@@ -339,7 +435,8 @@ function resetGame() {
   messages = [];
   const radius = Math.min(width, height) * 0.12;
   const target = buildTarget(currentTargetType, radius);
-  const isBoxWing = currentTargetType === "boxwing";
+  const base = TARGET_BASE[currentTargetType] || TARGET_BASE.debris;
+  const diff = DIFFICULTY[currentDifficulty] || DIFFICULTY.normal;
   state = {
     paused: false,
     won: false,
@@ -351,6 +448,7 @@ function resetGame() {
     energy: 1,
     heat: 0,
     score: 0,
+    scoreMul: diff.scoreMul,
     stableHold: 0,
     removalProgress: 0,
     lastHit: null,
@@ -379,17 +477,17 @@ function resetGame() {
       x: width * 0.5,
       y: height * 0.43,
       z: 0,
-      vx: isBoxWing ? -3 : -7,
-      vy: isBoxWing ? 1 : 2,
+      vx: base.vx * diff.drift,
+      vy: base.vy * diff.drift,
       vz: 0,
-      angle: isBoxWing ? -0.18 : -0.42,
-      pitch: isBoxWing ? 0.12 : 0.36,
-      roll: isBoxWing ? -0.05 : -0.22,
-      omega: isBoxWing ? 0.95 : 1.72,
-      omegaPitch: isBoxWing ? 0.18 : 0.34,
-      omegaRoll: isBoxWing ? -0.12 : -0.28,
-      mass: isBoxWing ? 95 : 220,
-      inertia: isBoxWing ? 165000 : 240000,
+      angle: base.angle,
+      pitch: base.pitch,
+      roll: base.roll,
+      omega: base.omega * diff.spin,
+      omegaPitch: base.omegaPitch * diff.spin,
+      omegaRoll: base.omegaRoll * diff.spin,
+      mass: base.mass,
+      inertia: base.inertia,
       radius,
       shape: target.shape,
       mesh: target.mesh,
@@ -701,7 +799,7 @@ function applyLaser(dt) {
   const spinBefore = Math.abs(debris.omega);
   const brakeBias = -Math.sign(debris.omega || 1) * Math.sign(tauZ || 1);
   const quality = brakeBias > 0 ? 1.0 : -0.35;
-  state.score = Math.max(0, state.score + Math.floor((60 * outwardScore * quality + 18) * dt * 60));
+  state.score = Math.max(0, state.score + Math.floor((60 * outwardScore * quality + 18) * dt * 60 * (state.scoreMul || 1)));
   state.lastHit = { ...hit, forceDir: hit.normal, quality };
 
   if (Math.abs(debris.omega) < spinBefore || quality > 0) {
@@ -832,7 +930,7 @@ function update(dt) {
   if (stability >= 1 && state.phase !== "REMOVE") {
     state.phase = "REMOVE";
     messages.push({ text: "ATTITUDE LOCK", life: 1.4, color: "#68ffa6" });
-    state.score += 1600;
+    state.score += 1600 * (state.scoreMul || 1);
   } else if (stability > 0.25 && state.phase === "DESPIN") {
     state.phase = "STABILIZE";
   } else if (stability <= 0.03 && state.phase === "STABILIZE") {
@@ -849,7 +947,7 @@ function update(dt) {
     if (state.phase === "REMOVE" && spin < 0.16 && stability >= 0.95) {
       state.won = true;
       state.phase = "CLEARED";
-      state.score += 4200 + Math.floor(state.energy * 1600);
+      state.score += (4200 + Math.floor(state.energy * 1600)) * (state.scoreMul || 1);
       messages.push({ text: "DEBRIS TRANSFER CONFIRMED", life: 4.2, color: "#48f3ff" });
     } else {
       // Crossed the recovery line while still tumbling → uncontrolled reentry.
@@ -1730,6 +1828,26 @@ function targetFaceColor(kind, lightLevel) {
     r = 154 + v * 76;
     g = 150 + v * 76;
     b = 142 + v * 80;
+  } else if (kind === "rocket-hull" || kind === "rocket-dome") {
+    // Aged off-white / metallic upper-stage skin.
+    r = 150 + v * 92;
+    g = 148 + v * 90;
+    b = 140 + v * 88;
+  } else if (kind === "rocket-band") {
+    // Dark thermal interstage band.
+    r = 54 + v * 56;
+    g = 50 + v * 52;
+    b = 48 + v * 50;
+  } else if (kind === "rocket-mount") {
+    // Shadowed engine mounting plate.
+    r = 60 + v * 60;
+    g = 56 + v * 56;
+    b = 54 + v * 54;
+  } else if (kind === "nozzle") {
+    // Coppery engine bell.
+    r = 118 + v * 96;
+    g = 84 + v * 66;
+    b = 62 + v * 52;
   } else if (kind === "front") {
     r = 70 + v * 120;
     g = 67 + v * 112;
@@ -1751,6 +1869,10 @@ function targetFaceStroke(kind) {
   if (kind === "instrument-lens") return "rgba(178, 236, 255, 0.78)";
   if (kind === "instrument-ring") return "rgba(220, 224, 218, 0.62)";
   if (kind === "antenna-dish" || kind === "antenna-feed" || kind === "antenna-mast" || kind === "boom") return "rgba(236, 236, 222, 0.58)";
+  if (kind === "rocket-hull" || kind === "rocket-dome") return "rgba(232, 238, 244, 0.5)";
+  if (kind === "rocket-band") return "rgba(28, 30, 34, 0.62)";
+  if (kind === "rocket-mount") return "rgba(150, 150, 150, 0.4)";
+  if (kind === "nozzle") return "rgba(214, 152, 110, 0.55)";
   if (kind === "bus-blanket") return "rgba(255, 230, 150, 0.58)";
   if (kind === "bus-rim") return "rgba(215, 212, 196, 0.42)";
   if (kind && kind.startsWith("bus")) return "rgba(255, 232, 188, 0.68)";
@@ -1798,10 +1920,10 @@ function drawDebris() {
 
   ctx.save();
 
-  // Halo: rock gets an organic ellipse, box-wing gets a rectangular range frame.
+  // Halo: rock gets an organic ellipse, elongated craft get a rectangular range frame.
   ctx.strokeStyle = "rgba(72, 243, 255, 0.16)";
   ctx.lineWidth = 1.5;
-  if (debris.kind === "boxwing") {
+  if (debris.kind === "boxwing" || debris.kind === "rocket") {
     const xs = projected.map((p) => p.x);
     const ys = projected.map((p) => p.y);
     const x0 = Math.min(...xs) - 12;
@@ -1901,7 +2023,7 @@ function drawDebris() {
   }
 
   // Internal "veins" — rock only.
-  if (debris.kind !== "boxwing") {
+  if (debris.kind === "debris") {
     ctx.strokeStyle = "rgba(255, 209, 102, 0.36)";
     ctx.lineWidth = 1.8;
     for (let i = 1; i < projected.length / 2; i += 3) {
@@ -2081,6 +2203,9 @@ function updateHud() {
   ui.stepRemove.classList.toggle("active", state.phase === "REMOVE" || state.phase === "CLEARED");
   ui.pauseButton.textContent = state.paused ? ">" : "II";
   ui.targetButton.textContent = TARGET_LABELS[currentTargetType] || currentTargetType.toUpperCase();
+  if (ui.difficultyButton) {
+    ui.difficultyButton.textContent = DIFFICULTY_LABELS[currentDifficulty] || currentDifficulty.toUpperCase();
+  }
 }
 
 function cycleTarget() {
@@ -2088,6 +2213,13 @@ function cycleTarget() {
   currentTargetType = TARGET_TYPES[(i + 1) % TARGET_TYPES.length];
   resetGame();
   messages.push({ text: `TARGET: ${TARGET_LABELS[currentTargetType]}`, life: 1.6, color: "#48f3ff" });
+}
+
+function cycleDifficulty() {
+  const i = DIFFICULTY_TYPES.indexOf(currentDifficulty);
+  currentDifficulty = DIFFICULTY_TYPES[(i + 1) % DIFFICULTY_TYPES.length];
+  resetGame();
+  messages.push({ text: `DIFFICULTY: ${DIFFICULTY_LABELS[currentDifficulty]}`, life: 1.6, color: "#ffd166" });
 }
 
 const TIME_SCALE = 1.3;
@@ -2170,6 +2302,9 @@ window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "t") {
     cycleTarget();
   }
+  if (event.key.toLowerCase() === "d") {
+    cycleDifficulty();
+  }
 });
 
 ui.pauseButton.addEventListener("click", () => {
@@ -2181,6 +2316,7 @@ ui.resetButton.addEventListener("click", () => {
   resetGame();
 });
 ui.targetButton.addEventListener("click", cycleTarget);
+if (ui.difficultyButton) ui.difficultyButton.addEventListener("click", cycleDifficulty);
 
 function showIntroOverlay() {
   if (ui.introOverlay) ui.introOverlay.hidden = false;

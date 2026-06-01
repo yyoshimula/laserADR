@@ -27,7 +27,26 @@ Orbital debris removal simulator — laser ablation + HCW (Hill-Clohessy-Wiltshi
 | 右ドラッグ | 視点回転 |
 | `P` / Space | 一時停止 |
 | `R` | リセット |
-| `T` | ターゲット切替 (DEBRIS / BOX-WING) |
+| `T` | ターゲット切替 (DEBRIS / BOX-WING / ROCKET) |
+| `D` | 難易度切替 (EASY / NORMAL / HARD) |
+
+### ターゲット
+
+| Target | 説明 |
+| --- | --- |
+| DEBRIS | 不定形の岩塊状デブリ。速い自転＋多軸タンブリング。 |
+| BOX-WING | 太陽電池パドル付き衛星バス。軽量で低速。 |
+| ROCKET | 使用済みロケット上段（円筒形）。重く慣性が大きい横転タンブリング。 |
+
+### 難易度
+
+初期角速度（タンブリング速度）と相対ドリフト速度をスケールする。スコア倍率も連動。
+
+| Level | 角速度 | ドリフト | スコア倍率 |
+| --- | --- | --- | --- |
+| EASY | ×0.55 | ×0.65 | ×0.7 |
+| NORMAL | ×1.0 | ×1.0 | ×1.0 |
+| HARD | ×1.7 | ×1.4 | ×1.6 |
 
 ## 物理モデル
 
