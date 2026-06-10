@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Laser Ablation Debris Stabilizer</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=sprint1">
   </head>
   <body>
     <main class="sim-shell" aria-label="Laser ablation debris stabilizer">
@@ -36,6 +36,13 @@
           </div>
           <div class="bar success"><i id="stableBar"></i></div>
         </div>
+        <div class="meter">
+          <div class="meter-label">
+            <span>CHASER FUEL</span>
+            <b id="fuelText">8.0 m/s</b>
+          </div>
+          <div class="bar"><i id="fuelBar"></i></div>
+        </div>
       </section>
 
       <section class="hud hud-right" aria-label="Target telemetry">
@@ -46,6 +53,14 @@
         <div class="readout">
           <span>DELTA-V</span>
           <b id="dvText">0.00 m/s</b>
+        </div>
+        <div class="readout">
+          <span>&delta;a SMA</span>
+          <b id="daText">0 m</b>
+        </div>
+        <div class="readout">
+          <span>PERIGEE &Delta;</span>
+          <b id="perigeeText">0 m</b>
         </div>
         <div class="readout">
           <span>REMOVAL</span>
@@ -70,6 +85,7 @@
         <button id="resetButton" type="button" title="Reset run">R</button>
         <button id="targetButton" type="button" title="Cycle target type (T)">DEBRIS</button>
         <button id="difficultyButton" type="button" title="Cycle difficulty (D)">NORMAL</button>
+        <button id="modeButton" type="button" title="Cycle physics mode (M)">REALISM</button>
         <div class="mode-strip" aria-label="Mission sequence">
           <span id="stepDespin">
             <em>1 · DESPIN</em>
@@ -81,7 +97,7 @@
           </span>
           <span id="stepRemove">
             <em>3 · REMOVE</em>
-            <small>軌道へ押し出す</small>
+            <small>逆行Δvで軌道を下げる</small>
           </span>
         </div>
         <div class="keyline" id="guidanceText">GUIDANCE VECTOR NOMINAL</div>
@@ -103,7 +119,7 @@
             </li>
             <li>
               <b>3. REMOVE</b>
-              <span>レーザーで<u>逆行</u>方向にΔv → 軌道が下がりデブリは<u>地球方向(下)</u>へドリフト。<br>姿勢ロック中に下方の点線(GOAL)へ到達すればクリア。<br><b style="color:#ff5268">⚠ 回転を止めずに高度を下げ切ると<u>大気圏で空中分解</u>=失敗</b></span>
+              <span>デブリの<u>正面(手前向きの面)</u>を撃って<u>逆行(−V)</u>方向へ押す → 軌道エネルギーが下がり近地点が降下。<br>右の R–V 面マップで予測軌道(点線)が <u>DISPOSAL 線</u>に届けばクリア。<br>※ 下(地球側)に押しても軌道は下がらない — 1周回って戻ってくるだけ (HCW)。<br><b style="color:#ff5268">⚠ 回転を止めずに軌道を下げると<u>制御不能な再突入</u>=失敗</b></span>
             </li>
           </ol>
           <div class="overlay-controls">
@@ -112,6 +128,7 @@
             <span><kbd>P</kbd>一時停止 / <kbd>R</kbd>リセット</span>
             <span><kbd>T</kbd>ターゲット切替 (DEBRIS / BOX-WING / ROCKET)</span>
             <span><kbd>D</kbd>難易度切替 (EASY / NORMAL / HARD)</span>
+            <span><kbd>M</kbd>物理モード切替 (REALISM: 減衰なし・燃料制限 / ARCADE: アシスト)</span>
           </div>
           <button id="startButton" type="button">START MISSION</button>
         </div>
@@ -125,6 +142,8 @@
           <div class="overlay-stats">
             <div><span>FINAL SCORE</span><b id="winScore">000000</b></div>
             <div><span>ENERGY LEFT</span><b id="winEnergy">0%</b></div>
+            <div><span>&Delta;v IMPARTED</span><b id="winDv">0.00 m/s</b></div>
+            <div><span>PERIGEE &Delta;</span><b id="winPerigee">0 m</b></div>
           </div>
           <button id="retryButton" type="button">NEW RUN</button>
         </div>
@@ -140,6 +159,6 @@
       </div>
     </main>
 
-    <script src="game.js"></script>
+    <script src="game.js?v=sprint1"></script>
   </body>
 </html>

@@ -77,12 +77,12 @@ button {
 .hud-bottom {
   left: 50%;
   bottom: max(18px, env(safe-area-inset-bottom));
-  width: min(760px, calc(100vw - 36px));
+  width: min(850px, calc(100vw - 36px));
   min-height: 56px;
   transform: translateX(-50%);
   padding: 9px 10px;
   display: grid;
-  grid-template-columns: 40px 40px 92px 84px 1fr minmax(150px, 210px);
+  grid-template-columns: 40px 40px 92px 84px 84px 1fr minmax(150px, 210px);
   gap: 9px;
   align-items: center;
 }
@@ -94,6 +94,12 @@ button {
 }
 
 #difficultyButton {
+  width: 84px !important;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+#modeButton {
   width: 84px !important;
   font-size: 11px;
   letter-spacing: 0.5px;
@@ -465,7 +471,7 @@ button {
   .hud-bottom {
     bottom: 12px;
     width: calc(100vw - 24px);
-    grid-template-columns: 34px 34px 70px 66px 1fr;
+    grid-template-columns: 34px 34px 70px 66px 66px 1fr;
     gap: 6px;
   }
 
@@ -476,6 +482,12 @@ button {
   }
 
   #difficultyButton {
+    width: 66px !important;
+    font-size: 9.5px;
+    letter-spacing: 0;
+  }
+
+  #modeButton {
     width: 66px !important;
     font-size: 9.5px;
     letter-spacing: 0;

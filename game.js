@@ -20,6 +20,10 @@ const ui = {
   stableBar: document.getElementById("stableBar"),
   spinText: document.getElementById("spinText"),
   dvText: document.getElementById("dvText"),
+  daText: document.getElementById("daText"),
+  perigeeText: document.getElementById("perigeeText"),
+  fuelText: document.getElementById("fuelText"),
+  fuelBar: document.getElementById("fuelBar"),
   removeText: document.getElementById("removeText"),
   scoreText: document.getElementById("scoreText"),
   orbitText: document.getElementById("orbitText"),
@@ -29,6 +33,7 @@ const ui = {
   resetButton: document.getElementById("resetButton"),
   targetButton: document.getElementById("targetButton"),
   difficultyButton: document.getElementById("difficultyButton"),
+  modeButton: document.getElementById("modeButton"),
   stepDespin: document.getElementById("stepDespin"),
   stepStabilize: document.getElementById("stepStabilize"),
   stepRemove: document.getElementById("stepRemove"),
@@ -37,6 +42,8 @@ const ui = {
   winOverlay: document.getElementById("winOverlay"),
   winScore: document.getElementById("winScore"),
   winEnergy: document.getElementById("winEnergy"),
+  winDv: document.getElementById("winDv"),
+  winPerigee: document.getElementById("winPerigee"),
   retryButton: document.getElementById("retryButton"),
   failOverlay: document.getElementById("failOverlay"),
   failReason: document.getElementById("failReason"),
@@ -76,6 +83,78 @@ const ORBIT = {
   earthRotPerOrbit: 0.06   // visible Earth rotation (game stylization, not real)
 };
 const VIEW_FLOW = -1;       // Camera looks aft along -V, so ground/track cues run in reverse.
+
+// --- Real-unit physics core (Sprint 1) ---
+// Relative translation lives in the Hill/LVLH frame of a reference circular
+// orbit, in SI units: rel = { x: radial (+zenith), y: along-track (+prograde),
+// z: cross-track } [m], velocities [m/s]. Pixel positions for rendering are
+// derived from rel each frame, so the dynamics no longer depend on screen size.
+const PHYS = (() => {
+  const mu = 3.986004418e14;                 // m^3/s^2
+  const Re = 6371e3;                         // m
+  const a = Re + ORBIT.altitudeKm * 1e3;
+  const n = Math.sqrt(mu / (a * a * a));     // mean motion ≈ 1.085e-3 rad/s
+  return { mu, Re, a, n, periodSec: TAU / n };
+})();
+// Wall-clock → physical seconds. One real orbit (~96.5 min) plays in ~90 s.
+const TIME_WARP = 64;
+// Ablation thrust on the target (cosine-of-incidence law applies on top).
+// Literature estimates for pulsed-laser ablation are mN-class; scaled ~100x so
+// a single pass fits in minutes of play. Masses and dynamics are real.
+const LASER_THRUST_N = 0.12;
+// Chaser station-keeping: PD follower in the Hill frame (physical time). The
+// chaser pays real Δv to hold formation — that consumption is the fuel meter.
+const CHASER = { kp: 1.6e-3, kd: 0.08, uMax: 3e-3, standoffFrac: 0.58 };
+
+const MODE_TYPES = ["realism", "arcade"];
+const MODE_LABELS = { realism: "REALISM", arcade: "ARCADE" };
+// realism: lossless orbit dynamics + finite station-keeping fuel.
+// arcade:  gentle artificial damping + unlimited fuel (assist mode).
+const MODES = {
+  realism: { damping: false, fuelBudget: 8 },
+  arcade:  { damping: true,  fuelBudget: Infinity }
+};
+let currentMode = "realism";
+
+// Closed-form Clohessy-Wiltshire propagation (state transition matrix).
+// Exact for the linearized dynamics — no integration error at any dt. Also
+// generates the one-orbit-ahead ghost prediction in the Hill-frame map.
+function cwPropagate(s, t, n = PHYS.n) {
+  const c = Math.cos(n * t);
+  const si = Math.sin(n * t);
+  return {
+    x: (4 - 3 * c) * s.x + (si / n) * s.vx + (2 / n) * (1 - c) * s.vy,
+    y: 6 * (si - n * t) * s.x + s.y + (2 / n) * (c - 1) * s.vx + ((4 * si) / n - 3 * t) * s.vy,
+    z: c * s.z + (si / n) * s.vz,
+    vx: 3 * n * si * s.x + c * s.vx + 2 * si * s.vy,
+    vy: 6 * n * (c - 1) * s.x - 2 * si * s.vx + (4 * c - 3) * s.vy,
+    vz: -n * si * s.z + c * s.vz
+  };
+}
+
+// Orbit-element readouts from the relative state (linearized):
+//   δa   = 4x + 2ẏ/n                  semi-major-axis offset vs reference
+//   A    = √((ẋ/n)² + (3x + 2ẏ/n)²)   radial oscillation amplitude (≈ a·e)
+//   δr_p = δa − A                      perigee change = min radial over 1 orbit
+// Radial velocity never enters δa: pushing the debris "down" does not lower
+// its orbit — only along-track (retrograde) Δv does. That is the lesson.
+function orbitReadouts(s, n = PHYS.n) {
+  const da = 4 * s.x + (2 * s.vy) / n;
+  const amp = Math.hypot(s.vx / n, 3 * s.x + (2 * s.vy) / n);
+  return { da, amp, perigeeDelta: da - amp };
+}
+
+function fmtMeters(m) {
+  const a = Math.abs(m);
+  if (a >= 1000) return `${(m / 1000).toFixed(a >= 10000 ? 0 : 1)} km`;
+  return `${Math.round(m)} m`;
+}
+
+function niceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-6))));
+  const r = raw / p;
+  return (r < 1.5 ? 1 : r < 3.5 ? 2 : r < 7.5 ? 5 : 10) * p;
+}
 
 // Earth texture (NASA Blue Marble equirectangular). The image is sampled per-pixel
 // against a ray-traced sphere so the surface curves correctly under the LEO horizon view.
@@ -141,10 +220,9 @@ function resize() {
   buildStars();
   if (state) {
     state.emitter = satelliteEmitter();
-    state.targetOrbitY = height * 0.74;
     state.orbit.centerX = width * 0.5;
     state.orbit.centerY = height * 0.43;
-    state.orbit.scale = Math.min(width, height) * 0.42;
+    syncDebrisRender();
   }
 }
 
@@ -185,12 +263,21 @@ const DIFFICULTY = {
 };
 let currentDifficulty = "normal";
 
-// Per-target baseline dynamics (at NORMAL difficulty). Difficulty multiplies the
-// spin and drift fields; mass/inertia and the resting attitude stay fixed.
+// Per-target baseline (at NORMAL difficulty). Translation is SI: massKg [kg],
+// radiusM [m] (sets the px-per-meter render scale), v0 = initial relative
+// drift { r: radial, v: along-track, h: cross-track } [m/s]. Attitude keeps
+// the stylized game-time tuning (omega, inertia) because real despin and
+// deorbit timescales differ by orders of magnitude — hit geometry and torque
+// signs stay honest. goalDp = per-pass perigee-lowering target [m]; heavier
+// objects move less per pass, as in real laser-ADR campaign studies.
+// Difficulty multiplies the spin (omega*) and drift (v0) fields.
 const TARGET_BASE = {
-  debris:  { vx: -7,   vy: 2,   angle: -0.42, pitch: 0.36, roll: -0.22, omega: 1.72, omegaPitch: 0.34, omegaRoll: -0.28, mass: 220, inertia: 240000 },
-  boxwing: { vx: -3,   vy: 1,   angle: -0.18, pitch: 0.12, roll: -0.05, omega: 0.95, omegaPitch: 0.18, omegaRoll: -0.12, mass: 95,  inertia: 165000 },
-  rocket:  { vx: -4.5, vy: 1.5, angle: -0.30, pitch: 0.06, roll: 0.42,  omega: 1.05, omegaPitch: 0.07, omegaRoll: 0.34,  mass: 320, inertia: 300000 }
+  debris:  { massKg: 220,  radiusM: 1.6, goalDp: 2000, v0: { r: -0.008, v: -0.020, h: 0 },
+             angle: -0.42, pitch: 0.36, roll: -0.22, omega: 1.72, omegaPitch: 0.34, omegaRoll: -0.28, inertia: 240000 },
+  boxwing: { massKg: 700,  radiusM: 3.4, goalDp: 800,  v0: { r: -0.005, v: -0.012, h: 0 },
+             angle: -0.18, pitch: 0.12, roll: -0.05, omega: 0.95, omegaPitch: 0.18, omegaRoll: -0.12, inertia: 165000 },
+  rocket:  { massKg: 2600, radiusM: 4.6, goalDp: 400,  v0: { r: -0.004, v: -0.008, h: 0 },
+             angle: -0.30, pitch: 0.06, roll: 0.42,  omega: 1.05, omegaPitch: 0.07, omegaRoll: 0.34,  inertia: 300000 }
 };
 
 function makeBoxWingShape(scale) {
@@ -437,6 +524,11 @@ function resetGame() {
   const target = buildTarget(currentTargetType, radius);
   const base = TARGET_BASE[currentTargetType] || TARGET_BASE.debris;
   const diff = DIFFICULTY[currentDifficulty] || DIFFICULTY.normal;
+  const mode = MODES[currentMode] || MODES.realism;
+  const pxPerM = radius / base.radiusM;
+  // Chaser leads the debris along +V; the camera looks aft at it. The standoff
+  // is whatever distance puts the debris at the usual screen anchor.
+  const standoffM = (width * CHASER.standoffFrac) / pxPerM;
   state = {
     paused: false,
     won: false,
@@ -453,14 +545,33 @@ function resetGame() {
     removalProgress: 0,
     lastHit: null,
     emitter: satelliteEmitter(),
-    targetOrbitY: height * 0.74,
+    pxPerM,
+    standoffM,
+    goalDp: base.goalDp,
+    fuel: mode.fuelBudget,
+    fuelBudget: mode.fuelBudget,
+    deltaA: 0,
+    oscAmp: 0,
+    perigeeDelta: 0,
+    // Debris relative state in the Hill frame of the reference orbit [m, m/s].
+    rel: {
+      x: 0,
+      y: -standoffM,
+      z: 0,
+      vx: base.v0.r * diff.drift,
+      vy: base.v0.v * diff.drift,
+      vz: base.v0.h * diff.drift
+    },
+    // Chaser starts on the reference orbit origin and station-keeps from there.
+    chaser: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, dvUsed: 0 },
+    trailRel: [],
+    trailTimer: 0,
     orbit: {
       centerX: width * 0.5,
       centerY: height * 0.43,
-      scale: Math.min(width, height) * 0.42,
-      meanMotion: TAU / ORBIT.periodSec,
+      meanMotion: PHYS.n,
       phase: 0.18,
-      phaseRate: TAU / ORBIT.periodSec,
+      phaseRate: PHYS.n,
       trail: []
     },
     sun: {
@@ -477,16 +588,13 @@ function resetGame() {
       x: width * 0.5,
       y: height * 0.43,
       z: 0,
-      vx: base.vx * diff.drift,
-      vy: base.vy * diff.drift,
-      vz: 0,
       angle: base.angle,
       pitch: base.pitch,
       roll: base.roll,
       omega: base.omega * diff.spin,
       omegaPitch: base.omegaPitch * diff.spin,
       omegaRoll: base.omegaRoll * diff.spin,
-      mass: base.mass,
+      massKg: base.massKg,
       inertia: base.inertia,
       radius,
       shape: target.shape,
@@ -495,6 +603,20 @@ function resetGame() {
       dv: 0
     }
   };
+  syncDebrisRender();
+}
+
+// Derive the debris' pixel-space render position from the SI relative states.
+// World px axes: +x = +V (depth toward camera), +y = -R (nadir, screen down),
+// +z = +H (cross-track). The camera sits at the chaser (emitter).
+function syncDebrisRender() {
+  const d = state.debris;
+  const rel = state.rel;
+  const ch = state.chaser;
+  const ppm = state.pxPerM;
+  d.x = state.emitter.x + (rel.y - ch.y) * ppm;
+  d.y = state.orbit.centerY - (rel.x - ch.x) * ppm;
+  d.z = (rel.z - ch.z) * ppm;
 }
 
 function worldPoint(local, debris = state.debris) {
@@ -752,15 +874,15 @@ function addParticles(hit, forceDir, intensity) {
   }
 }
 
-function applyLaser(dt) {
+function applyLaser(dtGame, dtPhys) {
   const canFire = pointer.firing && state.energy > 0.02 && state.heat < 0.99 && !state.won && !state.failed;
   if (!canFire) {
     state.lastHit = null;
     return;
   }
 
-  state.energy = clamp(state.energy - dt * 0.058, 0, 1);
-  state.heat = clamp(state.heat + dt * 0.22, 0, 1.05);
+  state.energy = clamp(state.energy - dtGame * 0.058, 0, 1);
+  state.heat = clamp(state.heat + dtGame * 0.22, 0, 1.05);
   const hit = findLaserHit();
   if (!hit) {
     state.lastHit = { miss: true, dir: null, point: { x: pointer.x, y: pointer.y } };
@@ -771,16 +893,20 @@ function applyLaser(dt) {
   // outwardScore: how square the beam strikes the surface (0 = grazing, 1 = perpendicular).
   // The beam ray and the hit normal are both in the laser-satellite camera frame.
   const outwardScore = clamp(-dot3(hit.rayDir3D, hit.normal3D), 0.15, 1);
-  const impulse = (4600 * outwardScore) * dt;
 
-  // Ablation jet ejects material along +normal (outward); by Newton's third law the
-  // reaction thrust on the spacecraft is along −normal (inward, away from the laser).
-  // World axes for cameraAxes: +x = +V (along-track), +y = -R (nadir), +z = +H (cross-track).
-  // CW state uses debris.vx ≡ ẋ_V, debris.vy ≡ ẋ_(-R), debris.vz ≡ ẋ_H.
-  debris.vx -= (hit.normal3D.x * impulse) / debris.mass;
-  debris.vy -= (hit.normal3D.y * impulse) / debris.mass;
-  debris.vz -= (hit.normal3D.z * impulse) / debris.mass;
-  debris.dv += impulse / debris.mass;
+  // Translation: real ablation impulse in SI, applied over physical time. The
+  // jet ejects material along +normal; by Newton's third law the reaction Δv
+  // on the debris is along −normal (away from the laser).
+  // World px axes: +x = +V (along-track), +y = -R (nadir), +z = +H.
+  const dvSI = (LASER_THRUST_N * outwardScore / debris.massKg) * dtPhys;
+  state.rel.vy -= hit.normal3D.x * dvSI;   // along-track (+prograde)
+  state.rel.vx += hit.normal3D.y * dvSI;   // radial (+zenith); world +y is nadir
+  state.rel.vz -= hit.normal3D.z * dvSI;   // cross-track
+  debris.dv += dvSI;
+
+  // Attitude: stylized impulse magnitude (game-time pacing — real despin and
+  // deorbit timescales are orders of magnitude apart), honest geometry/signs.
+  const impulse = (4600 * outwardScore) * dtGame;
 
   // 3-D torque  τ = r × F  with F = −n̂ · |impulse|  (inward thrust at hit point).
   const Fx = -hit.normal3D.x * impulse;
@@ -799,7 +925,7 @@ function applyLaser(dt) {
   const spinBefore = Math.abs(debris.omega);
   const brakeBias = -Math.sign(debris.omega || 1) * Math.sign(tauZ || 1);
   const quality = brakeBias > 0 ? 1.0 : -0.35;
-  state.score = Math.max(0, state.score + Math.floor((60 * outwardScore * quality + 18) * dt * 60 * (state.scoreMul || 1)));
+  state.score = Math.max(0, state.score + Math.floor((60 * outwardScore * quality + 18) * dtGame * 60 * (state.scoreMul || 1)));
   state.lastHit = { ...hit, forceDir: hit.normal, quality };
 
   if (Math.abs(debris.omega) < spinBefore || quality > 0) {
@@ -866,65 +992,92 @@ function updateSunModel(dt) {
   }
 }
 
-function update(dt) {
+function update(dtWall) {
   if (state.paused) return;
-  state.time += dt;
+  const dtGame = dtWall * TIME_SCALE;   // stylized clock: attitude, heat, FX
+  const dtPhys = dtWall * TIME_WARP;    // physical seconds: orbit dynamics, sun
+  state.time += dtGame;
   const debris = state.debris;
+  const mode = MODES[currentMode] || MODES.realism;
 
-  updateSunModel(dt);
-  applyLaser(dt);
+  updateSunModel(dtPhys);
+  applyLaser(dtGame, dtPhys);
 
   const solarFactor = 0.18 + 0.82 * state.sun.illumination;
-  state.energy = clamp(state.energy + dt * 0.021 * solarFactor, 0, 1);
-  state.heat = clamp(state.heat - dt * 0.105, 0, 1);
+  state.energy = clamp(state.energy + dtGame * 0.021 * solarFactor, 0, 1);
+  state.heat = clamp(state.heat - dtGame * 0.105, 0, 1);
   state.overheated = state.heat > 0.94;
 
-  // Clohessy-Wiltshire (Hill) equations in the LVLH-to-screen mapping.
-  //   debris state ↔ LVLH: x ≡ X_V, y-centerY ≡ -X_R (nadir offset), z ≡ X_H.
-  //   In LVLH: Ẍ_R = 3n²X_R + 2nẊ_V,  Ẍ_V = -2nẊ_R,  Ẍ_H = -n²X_H
-  //   Screen: ax = 2n·vy,  ay = 3n²·(y-centerY) - 2n·vx,  az = -n²·z
+  // --- Relative orbital motion: exact closed-form CW propagation (SI). ---
+  const rel = cwPropagate(state.rel, dtPhys);
+  if (mode.damping) {
+    // ARCADE assist only — the real vacuum dynamics are lossless.
+    const k = Math.pow(0.9995, dtGame * 60);
+    rel.vx *= k;
+    rel.vy *= k;
+    rel.vz *= k;
+  }
+  state.rel = rel;
+
+  // --- Chaser station-keeping: PD follower paying real Δv to hold formation.
+  // Drift you let build up is fuel the chaser must spend chasing it.
+  const ch = state.chaser;
+  const chNext = cwPropagate(ch, dtPhys);
+  chNext.dvUsed = ch.dvUsed || 0;
+  if (!state.won && !state.failed) {
+    const ux = clamp(CHASER.kp * (rel.x - ch.x) + CHASER.kd * (rel.vx - ch.vx), -CHASER.uMax, CHASER.uMax);
+    const uy = clamp(CHASER.kp * (rel.y + state.standoffM - ch.y) + CHASER.kd * (rel.vy - ch.vy), -CHASER.uMax, CHASER.uMax);
+    const uz = clamp(CHASER.kp * (rel.z - ch.z) + CHASER.kd * (rel.vz - ch.vz), -CHASER.uMax, CHASER.uMax);
+    chNext.vx += ux * dtPhys;
+    chNext.vy += uy * dtPhys;
+    chNext.vz += uz * dtPhys;
+    const used = Math.hypot(ux, uy, uz) * dtPhys;
+    chNext.dvUsed += used;
+    if (Number.isFinite(state.fuel)) {
+      state.fuel = Math.max(0, state.fuel - used);
+      if (state.fuel <= 0) {
+        state.failed = true;
+        state.phase = "FAILED";
+        state.failReason = "チェイサーの軌道維持燃料が枯渇 — 相対ドリフトを追い切れずデブリをロスト。大きな振動を起こす前にドリフトを抑えること。";
+        messages.push({ text: "STATION-KEEPING FUEL DEPLETED", life: 4.2, color: "#ff5268" });
+      }
+    }
+  }
+  state.chaser = chNext;
+
+  syncDebrisRender();
+
+  debris.angle += debris.omega * dtGame;
+  debris.pitch += debris.omegaPitch * dtGame;
+  debris.roll += debris.omegaRoll * dtGame;
+
+  if (mode.damping) {
+    // Attitude assist (ARCADE only): tumble decays a little on its own.
+    debris.omega *= Math.pow(0.999, dtGame * 60);
+    debris.omegaPitch *= Math.pow(0.998, dtGame * 60);
+    debris.omegaRoll *= Math.pow(0.998, dtGame * 60);
+  }
+
   const orbit = state.orbit;
-  const dy = debris.y - orbit.centerY;
-  const n = orbit.meanMotion;
-  const hcwAx = 2 * n * debris.vy;
-  const hcwAy = 3 * n * n * dy - 2 * n * debris.vx;
-  const hcwAz = -n * n * debris.z;
-  debris.vx += hcwAx * dt;
-  debris.vy += hcwAy * dt;
-  debris.vz += hcwAz * dt;
-
-  debris.x += debris.vx * dt;
-  debris.y += debris.vy * dt;
-  debris.z += debris.vz * dt;
-  debris.angle += debris.omega * dt;
-  debris.pitch += debris.omegaPitch * dt;
-  debris.roll += debris.omegaRoll * dt;
-
-  // Artificial damping (gameplay only — real vacuum orbit is lossless).
-  debris.vx *= Math.pow(0.999, dt * 60);
-  debris.vy *= Math.pow(0.999, dt * 60);
-  debris.vz *= Math.pow(0.999, dt * 60);
-  debris.omega *= Math.pow(0.999, dt * 60);
-  debris.omegaPitch *= Math.pow(0.998, dt * 60);
-  debris.omegaRoll *= Math.pow(0.998, dt * 60);
-
-  // Top boundary reflects (debris can't escape to zenith); bottom boundary is the
-  // recovery zone, so let it pass through up to height*0.86 before reflecting.
-  if (debris.y < height * 0.18) debris.vy = Math.abs(debris.vy) * 0.88;
-  if (debris.y > height * 0.86) debris.vy = -Math.abs(debris.vy) * 0.88;
-  if (debris.x < width * 0.22 || debris.x > width * 0.82) debris.vx *= -0.86;
-
   orbit.trail.push({ x: debris.x, y: debris.y, life: 7 });
   orbit.trail = orbit.trail.filter((p) => {
-    p.life -= dt;
+    p.life -= dtGame;
     return p.life > 0;
   }).slice(-170);
 
+  // Hill-frame trail for the R-V map (sampled in wall time).
+  state.trailTimer -= dtWall;
+  if (state.trailTimer <= 0) {
+    state.trailTimer = 0.3;
+    state.trailRel.push({ x: rel.x, y: rel.y });
+    if (state.trailRel.length > 420) state.trailRel.shift();
+  }
+
   const spin = Math.hypot(debris.omega, debris.omegaPitch, debris.omegaRoll);
   if (spin < 0.16) {
-    state.stableHold += dt;
+    state.stableHold += dtGame;
   } else {
-    state.stableHold = Math.max(0, state.stableHold - dt * 1.3);
+    state.stableHold = Math.max(0, state.stableHold - dtGame * 1.3);
   }
   const stability = clamp(state.stableHold / 2.2, 0, 1);
   if (stability >= 1 && state.phase !== "REMOVE") {
@@ -937,12 +1090,16 @@ function update(dt) {
     state.phase = "DESPIN";
   }
 
-  // Deorbit progress: laser-induced retrograde impulses cause debris to drift in -R
-  // (nadir / toward Earth, i.e. screen +y) per HCW dynamics. Measure progress from
-  // the reference orbit (centerY) down to the recovery line (targetOrbitY).
-  const corridor = clamp((debris.y - state.orbit.centerY) / (state.targetOrbitY - state.orbit.centerY), 0, 1);
-  state.removalProgress = state.phase === "REMOVE" || state.won ? corridor : Math.min(corridor, 0.999);
-  const reachedGoal = corridor >= 1;
+  // Deorbit progress: only along-track (retrograde) Δv lowers the orbit. The
+  // win condition is the predicted perigee drop δr_p = δa − A reaching the
+  // per-pass disposal target — equivalently, the one-orbit ghost trajectory
+  // dipping below the disposal line in the Hill-frame map.
+  const ro = orbitReadouts(rel);
+  state.deltaA = ro.da;
+  state.oscAmp = ro.amp;
+  state.perigeeDelta = ro.perigeeDelta;
+  state.removalProgress = clamp(-ro.perigeeDelta / state.goalDp, 0, 1);
+  const reachedGoal = ro.perigeeDelta <= -state.goalDp;
   if (!state.won && !state.failed && reachedGoal) {
     if (state.phase === "REMOVE" && spin < 0.16 && stability >= 0.95) {
       state.won = true;
@@ -950,27 +1107,27 @@ function update(dt) {
       state.score += (4200 + Math.floor(state.energy * 1600)) * (state.scoreMul || 1);
       messages.push({ text: "DEBRIS TRANSFER CONFIRMED", life: 4.2, color: "#48f3ff" });
     } else {
-      // Crossed the recovery line while still tumbling → uncontrolled reentry.
+      // Orbit lowered to the disposal target while still tumbling → uncontrolled reentry.
       state.failed = true;
       state.phase = "FAILED";
       state.failReason = spin >= 0.16
-        ? `回転を止め切れていません (${spin.toFixed(2)} rad/s)。タンブリング状態のまま大気圏へ突入 — デブリは回収不能。`
-        : "姿勢が安定する前に高度を下げ過ぎました — デブリは回収不能。";
+        ? `回転を止め切れていません (${spin.toFixed(2)} rad/s)。タンブリングしたまま軌道を下げた — 制御不能な再突入でデブリは回収不能。`
+        : "姿勢が安定する前に軌道を下げ過ぎました — デブリは回収不能。";
       messages.push({ text: "UNCONTROLLED REENTRY", life: 4.2, color: "#ff5268" });
     }
   }
 
   particles = particles.filter((p) => {
-    p.life -= dt;
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.vx *= Math.pow(0.94, dt * 60);
-    p.vy *= Math.pow(0.94, dt * 60);
+    p.life -= dtGame;
+    p.x += p.vx * dtGame;
+    p.y += p.vy * dtGame;
+    p.vx *= Math.pow(0.94, dtGame * 60);
+    p.vy *= Math.pow(0.94, dtGame * 60);
     return p.life > 0;
   });
 
   messages = messages.filter((m) => {
-    m.life -= dt;
+    m.life -= dtGame;
     return m.life > 0;
   });
 }
@@ -1016,34 +1173,6 @@ function drawBackground() {
     ctx.ellipse(vp.x, vp.y + height * scale * 0.44, width * scale, height * scale * 0.2, 0, 0, TAU);
     ctx.stroke();
   }
-  // Recovery line: horizontal, drawn at targetOrbitY (toward Earth / nadir).
-  // Reaching this line = sufficient retrograde Δv applied → orbit lowered → deorbit.
-  const isRemovePhase = state.phase === "REMOVE";
-  const corridorAlpha = isRemovePhase ? 0.85 : 0.35;
-  const corridorColor = isRemovePhase ? "rgba(104, 255, 166, " : "rgba(255, 209, 102, ";
-  ctx.setLineDash([8, 12]);
-  ctx.strokeStyle = corridorColor + corridorAlpha + ")";
-  ctx.lineWidth = isRemovePhase ? 2 : 1;
-  ctx.beginPath();
-  ctx.moveTo(width * 0.16, state.targetOrbitY);
-  ctx.lineTo(width * 0.84, state.targetOrbitY);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.lineWidth = 1;
-  ctx.save();
-  const labelAlpha = isRemovePhase ? 0.95 : 0.7;
-  ctx.fillStyle = corridorColor + labelAlpha + ")";
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.65)";
-  ctx.lineWidth = 3;
-  ctx.font = "800 12px Inter, system-ui, sans-serif";
-  ctx.textAlign = "center";
-  const labelX = width * 0.5;
-  ctx.strokeText("▼ GOAL — DEORBIT (toward Earth) ▼", labelX, state.targetOrbitY - 8);
-  ctx.fillText("▼ GOAL — DEORBIT (toward Earth) ▼", labelX, state.targetOrbitY - 8);
-  ctx.font = "700 10px Inter, system-ui, sans-serif";
-  ctx.strokeText("回収軌道(地球側) へ押し下げろ", labelX, state.targetOrbitY + 14);
-  ctx.fillText("回収軌道(地球側) へ押し下げろ", labelX, state.targetOrbitY + 14);
-  ctx.restore();
   ctx.restore();
   drawOrbitalMotionCues();
   drawRelativeOrbitTrail();
@@ -1550,6 +1679,195 @@ function drawOrbitMap() {
   ctx.restore();
 }
 
+// Hill-frame (R-V plane) map: the canonical relative-motion picture. Shows the
+// debris trail, the exact one-orbit-ahead CW prediction (ghost), the reference
+// orbit line, and the disposal target line. The prediction's lowest radial
+// point IS δr_p, so "ghost dips below the disposal line" = the win condition.
+function drawHillMap() {
+  if (!state) return;
+  const size = Math.min(230, Math.min(width, height) * 0.34);
+  const pad = 14;
+  const x0 = width - size - pad;
+  // Anchor above the deck, but never under the right-hand HUD column.
+  const y0 = Math.max(height * 0.46, height * 0.82 - size - pad);
+  const rel = state.rel;
+
+  // Ghost prediction: one orbit ahead via the closed-form CW solution.
+  const N = 72;
+  const pred = [];
+  for (let i = 0; i <= N; i++) {
+    pred.push(cwPropagate(rel, (PHYS.periodSec * i) / N));
+  }
+
+  // Auto-fit bounds [m]: prediction + trail + chaser + origin (+ goal line
+  // once the player is getting close, so early epicycles stay readable).
+  let minX = 0, maxX = 0, minY = 0, maxY = 0;
+  const include = (mx, my) => {
+    if (mx < minX) minX = mx;
+    if (mx > maxX) maxX = mx;
+    if (my < minY) minY = my;
+    if (my > maxY) maxY = my;
+  };
+  for (const p of pred) include(p.x, p.y);
+  for (const t of state.trailRel) include(t.x, t.y);
+  include(rel.x, rel.y);
+  include(state.chaser.x, state.chaser.y);
+  const goalX = -state.goalDp;
+  const showGoal = state.phase === "REMOVE" || state.won ||
+    state.perigeeDelta <= -0.3 * state.goalDp;
+  if (showGoal) include(goalX, 0);
+  let rangeX = Math.max(maxX - minX, 40);
+  let rangeY = Math.max(maxY - minY, 40);
+  minX -= rangeX * 0.14; maxX += rangeX * 0.14;
+  minY -= rangeY * 0.12; maxY += rangeY * 0.12;
+  rangeX = maxX - minX;
+  rangeY = maxY - minY;
+  const plotX = x0 + 8;
+  const plotY = y0 + 24;
+  const plotW = size - 16;
+  const plotH = size - 44;
+  // One shared scale → true shapes (the 2:1 CW ellipse really looks 2:1).
+  const s = Math.min(plotW / rangeY, plotH / rangeX);
+  const cmx = (minX + maxX) / 2;
+  const cmy = (minY + maxY) / 2;
+  const px = (my) => plotX + plotW / 2 + (my - cmy) * s;   // along-track → screen x
+  const py = (mx) => plotY + plotH / 2 - (mx - cmx) * s;   // radial → screen y (up = zenith)
+
+  ctx.save();
+  ctx.fillStyle = "rgba(3, 14, 18, 0.78)";
+  ctx.strokeStyle = "rgba(72, 243, 255, 0.32)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.rect(x0, y0, size, size);
+  ctx.fill();
+  ctx.stroke();
+
+  const scale = size / 140;
+  const titleFont = Math.round(10 * scale);
+  const tinyFont = Math.round(8.5 * scale);
+  ctx.fillStyle = "rgba(140, 169, 173, 0.9)";
+  ctx.font = `800 ${titleFont}px ui-sans-serif, system-ui`;
+  ctx.textAlign = "left";
+  ctx.fillText("HILL FRAME R–V", x0 + 8, y0 + titleFont + 4);
+  ctx.fillStyle = "rgba(140, 169, 173, 0.7)";
+  ctx.font = `700 ${tinyFont}px ui-sans-serif, system-ui`;
+  ctx.textAlign = "right";
+  ctx.fillText("+V → / ↑ +R", x0 + size - 8, y0 + titleFont + 4);
+
+  ctx.beginPath();
+  ctx.rect(plotX, plotY, plotW, plotH);
+  ctx.clip();
+
+  // Grid at round meter steps.
+  const step = niceStep(Math.max(rangeX, rangeY) / 4);
+  ctx.strokeStyle = "rgba(104, 255, 230, 0.07)";
+  ctx.lineWidth = 1;
+  for (let gx = Math.ceil(minX / step) * step; gx <= maxX; gx += step) {
+    ctx.beginPath();
+    ctx.moveTo(plotX, py(gx));
+    ctx.lineTo(plotX + plotW, py(gx));
+    ctx.stroke();
+  }
+  for (let gy = Math.ceil(minY / step) * step; gy <= maxY; gy += step) {
+    ctx.beginPath();
+    ctx.moveTo(px(gy), plotY);
+    ctx.lineTo(px(gy), plotY + plotH);
+    ctx.stroke();
+  }
+
+  // Reference orbit altitude (radial = 0).
+  ctx.strokeStyle = "rgba(232, 251, 255, 0.28)";
+  ctx.setLineDash([2, 4]);
+  ctx.beginPath();
+  ctx.moveTo(plotX, py(0));
+  ctx.lineTo(plotX + plotW, py(0));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(232, 251, 255, 0.45)";
+  ctx.font = `700 ${tinyFont}px ui-sans-serif, system-ui`;
+  ctx.textAlign = "left";
+  ctx.fillText("REF ORBIT", plotX + 3, py(0) - 3);
+
+  // Disposal target line: the ghost trajectory must dip below it.
+  if (showGoal) {
+    const reached = state.perigeeDelta <= -state.goalDp;
+    ctx.strokeStyle = reached ? "rgba(104, 255, 166, 0.85)" : "rgba(255, 209, 102, 0.7)";
+    ctx.setLineDash([7, 6]);
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(plotX, py(goalX));
+    ctx.lineTo(plotX + plotW, py(goalX));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.fillStyle = reached ? "rgba(104, 255, 166, 0.95)" : "rgba(255, 209, 102, 0.9)";
+    ctx.fillText(`DISPOSAL −${fmtMeters(state.goalDp)}`, plotX + 3, py(goalX) - 3);
+  }
+
+  // Debris trail (history).
+  const trail = state.trailRel;
+  if (trail.length > 1) {
+    ctx.strokeStyle = "rgba(104, 255, 166, 0.5)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i < trail.length; i++) {
+      const p = trail[i];
+      if (i === 0) ctx.moveTo(px(p.y), py(p.x));
+      else ctx.lineTo(px(p.y), py(p.x));
+    }
+    ctx.lineTo(px(rel.y), py(rel.x));
+    ctx.stroke();
+  }
+
+  // Ghost prediction (one orbit ahead, exact CW).
+  ctx.strokeStyle = "rgba(72, 243, 255, 0.75)";
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  for (let i = 0; i < pred.length; i++) {
+    const p = pred[i];
+    if (i === 0) ctx.moveTo(px(p.y), py(p.x));
+    else ctx.lineTo(px(p.y), py(p.x));
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Chaser (cyan square) and debris (amber dot).
+  ctx.fillStyle = "#48f3ff";
+  ctx.fillRect(px(state.chaser.y) - 2.5, py(state.chaser.x) - 2.5, 5, 5);
+  ctx.fillStyle = "#ffd166";
+  ctx.beginPath();
+  ctx.arc(px(rel.y), py(rel.x), 3.4, 0, TAU);
+  ctx.fill();
+
+  ctx.restore();
+
+  // Scale bar + legend (outside the clip).
+  ctx.save();
+  ctx.font = `700 ${tinyFont}px ui-sans-serif, system-ui`;
+  ctx.fillStyle = "rgba(140, 169, 173, 0.8)";
+  ctx.textAlign = "left";
+  const barLen = step * s;
+  const barY = y0 + size - 8;
+  ctx.strokeStyle = "rgba(140, 169, 173, 0.8)";
+  ctx.beginPath();
+  ctx.moveTo(x0 + 8, barY);
+  ctx.lineTo(x0 + 8 + barLen, barY);
+  ctx.stroke();
+  ctx.fillText(fmtMeters(step), x0 + 12 + barLen, barY + 3);
+  ctx.textAlign = "right";
+  ctx.strokeStyle = "rgba(72, 243, 255, 0.75)";
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x0 + size - 64 * scale, barY);
+  ctx.lineTo(x0 + size - 44 * scale, barY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(140, 169, 173, 0.8)";
+  ctx.fillText("1 ORBIT PRED", x0 + size - 8, barY + 3);
+  ctx.restore();
+}
+
 function drawAxisLabels() {
   ctx.save();
   ctx.font = "800 10px ui-sans-serif, system-ui";
@@ -1649,12 +1967,6 @@ function drawRelativeOrbitTrail() {
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
   }
-  ctx.globalAlpha = 0.8;
-  ctx.strokeStyle = "rgba(255, 209, 102, 0.35)";
-  ctx.setLineDash([5, 8]);
-  ctx.beginPath();
-  ctx.ellipse(state.orbit.centerX, state.orbit.centerY, state.orbit.scale * 0.42, state.orbit.scale * 0.16, 0, 0, TAU);
-  ctx.stroke();
   ctx.restore();
 }
 
@@ -2146,6 +2458,7 @@ function draw() {
   drawEclipseTint();
   drawSatelliteFrame();
   drawOrbitMap();
+  drawHillMap();
   drawReticle();
   drawMessages();
 }
@@ -2163,6 +2476,22 @@ function updateHud() {
   ui.stableBar.style.width = `${stability * 100}%`;
   ui.spinText.textContent = `${totalSpin.toFixed(2)} rad/s`;
   ui.dvText.textContent = `${debris.dv.toFixed(2)} m/s`;
+  if (ui.daText) ui.daText.textContent = fmtMeters(state.deltaA);
+  if (ui.perigeeText) {
+    ui.perigeeText.textContent = `${fmtMeters(state.perigeeDelta)} / −${fmtMeters(state.goalDp)}`;
+    ui.perigeeText.style.color = state.perigeeDelta <= -state.goalDp ? "#68ffa6" : "";
+  }
+  if (ui.fuelText && ui.fuelBar) {
+    if (Number.isFinite(state.fuelBudget)) {
+      ui.fuelText.textContent = `${state.fuel.toFixed(1)} m/s`;
+      ui.fuelBar.style.width = `${clamp(state.fuel / state.fuelBudget, 0, 1) * 100}%`;
+      ui.fuelText.style.color = state.fuel < state.fuelBudget * 0.25 ? "#ff5268" : "";
+    } else {
+      ui.fuelText.textContent = "∞ (ARCADE)";
+      ui.fuelBar.style.width = "100%";
+      ui.fuelText.style.color = "";
+    }
+  }
   ui.removeText.textContent = `${Math.round(state.removalProgress * 100)}%`;
   ui.scoreText.textContent = String(Math.floor(state.score)).padStart(6, "0");
 
@@ -2175,27 +2504,31 @@ function updateHud() {
   else phaseLabel = "DWN";
   ui.orbitText.textContent = `${phaseLabel} ${String(phaseDeg).padStart(3, "0")}°`;
   const sunPct = Math.round(state.sun.illumination * 100);
-  if (state.sun.timeToEvent > 0 && state.sun.timeToEvent < 999) {
+  if (state.sun.timeToEvent > 0) {
+    // timeToEvent is physical seconds; show the wall-clock countdown.
     const tag = state.sun.nextEvent === "ECLIPSE" ? "ECL" : "SUN";
-    ui.sunText.textContent = `${sunPct}% ${tag}-${Math.ceil(state.sun.timeToEvent)}s`;
+    ui.sunText.textContent = `${sunPct}% ${tag}-${Math.ceil(state.sun.timeToEvent / TIME_WARP)}s`;
   } else {
     ui.sunText.textContent = `${sunPct}%`;
   }
 
+  const lowFuel = Number.isFinite(state.fuelBudget) && state.fuel < state.fuelBudget * 0.25 && !state.won && !state.failed;
   ui.guidanceText.textContent = state.won
     ? "クリア:  R で再挑戦"
     : state.failed
       ? "ミッション失敗 — R で再挑戦"
       : state.overheated
       ? "THERMAL LIMIT — 冷却まで待機"
-      : state.sun.inEclipse
+      : lowFuel
+        ? `⚠ 燃料残少 (${state.fuel.toFixed(1)} m/s) — ドリフトを抑えて無駄な振動を起こすな`
+        : state.sun.inEclipse
         ? "ECLIPSE — エネルギー再生停止中"
         : state.phase === "DESPIN"
           ? `回転中: デブリの端を撃って減速 (${totalSpin.toFixed(2)} → < 0.16 rad/s)`
           : state.phase === "STABILIZE"
             ? `ホールド: 撃たずに姿勢維持 (STABILITY ${Math.round(stability * 100)}%)`
             : state.phase === "REMOVE"
-              ? `デブリの上側を撃って減速→地球方向(下)へデオービット (${Math.round(state.removalProgress * 100)}%)`
+              ? `正面(手前向き)の面を撃って後方(−V)へ押せ — PERIGEE ${fmtMeters(state.perigeeDelta)} → 目標 −${fmtMeters(state.goalDp)}`
               : "HCW RELATIVE MODE";
 
   ui.stepDespin.classList.toggle("active", state.phase === "DESPIN");
@@ -2205,6 +2538,9 @@ function updateHud() {
   ui.targetButton.textContent = TARGET_LABELS[currentTargetType] || currentTargetType.toUpperCase();
   if (ui.difficultyButton) {
     ui.difficultyButton.textContent = DIFFICULTY_LABELS[currentDifficulty] || currentDifficulty.toUpperCase();
+  }
+  if (ui.modeButton) {
+    ui.modeButton.textContent = MODE_LABELS[currentMode] || currentMode.toUpperCase();
   }
 }
 
@@ -2222,11 +2558,22 @@ function cycleDifficulty() {
   messages.push({ text: `DIFFICULTY: ${DIFFICULTY_LABELS[currentDifficulty]}`, life: 1.6, color: "#ffd166" });
 }
 
-const TIME_SCALE = 1.3;
+function cycleMode() {
+  const i = MODE_TYPES.indexOf(currentMode);
+  currentMode = MODE_TYPES[(i + 1) % MODE_TYPES.length];
+  resetGame();
+  messages.push({
+    text: `MODE: ${MODE_LABELS[currentMode]}`,
+    life: 1.8,
+    color: currentMode === "realism" ? "#48f3ff" : "#ffd166"
+  });
+}
+
+const TIME_SCALE = 1.3;  // stylized clock rate (attitude, heat, FX)
 function frame(now) {
   const realDt = Math.min(0.033, (now - last) / 1000 || 0);
   last = now;
-  update(realDt * TIME_SCALE);
+  update(realDt);
   draw();
   updateHud();
   checkResultOverlays();
@@ -2273,7 +2620,8 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   if (event.button !== 0) return;
   pointer.firing = true;
-  applyLaser(0.045);
+  // Tap burst: one short pulse (dtGame, matching dtPhys for the same wall time).
+  applyLaser(0.045, (0.045 / TIME_SCALE) * TIME_WARP);
   canvas.setPointerCapture(event.pointerId);
 });
 canvas.addEventListener("pointerup", (event) => {
@@ -2305,6 +2653,9 @@ window.addEventListener("keydown", (event) => {
   if (event.key.toLowerCase() === "d") {
     cycleDifficulty();
   }
+  if (event.key.toLowerCase() === "m") {
+    cycleMode();
+  }
 });
 
 ui.pauseButton.addEventListener("click", () => {
@@ -2317,6 +2668,7 @@ ui.resetButton.addEventListener("click", () => {
 });
 ui.targetButton.addEventListener("click", cycleTarget);
 if (ui.difficultyButton) ui.difficultyButton.addEventListener("click", cycleDifficulty);
+if (ui.modeButton) ui.modeButton.addEventListener("click", cycleMode);
 
 function showIntroOverlay() {
   if (ui.introOverlay) ui.introOverlay.hidden = false;
@@ -2332,6 +2684,8 @@ function showWinOverlay() {
   if (!ui.winOverlay) return;
   ui.winScore.textContent = String(Math.floor(state.score)).padStart(6, "0");
   ui.winEnergy.textContent = `${Math.round(state.energy * 100)}%`;
+  if (ui.winDv) ui.winDv.textContent = `${state.debris.dv.toFixed(2)} m/s`;
+  if (ui.winPerigee) ui.winPerigee.textContent = fmtMeters(state.perigeeDelta);
   ui.winOverlay.hidden = false;
 }
 
@@ -2385,6 +2739,16 @@ if (ui.failRetryButton) {
 }
 
 window.addEventListener("resize", resize);
+
+// Inspection hook for tests/debugging (the game itself never reads this).
+window.LABS = {
+  get state() { return state; },
+  get mode() { return currentMode; },
+  cwPropagate,
+  orbitReadouts,
+  PHYS,
+  TIME_WARP
+};
 
 resize();
 resetGame();
