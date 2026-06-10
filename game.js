@@ -1080,14 +1080,16 @@ function update(dtWall) {
     state.stableHold = Math.max(0, state.stableHold - dtGame * 1.3);
   }
   const stability = clamp(state.stableHold / 2.2, 0, 1);
-  if (stability >= 1 && state.phase !== "REMOVE") {
-    state.phase = "REMOVE";
-    messages.push({ text: "ATTITUDE LOCK", life: 1.4, color: "#68ffa6" });
-    state.score += 1600 * (state.scoreMul || 1);
-  } else if (stability > 0.25 && state.phase === "DESPIN") {
-    state.phase = "STABILIZE";
-  } else if (stability <= 0.03 && state.phase === "STABILIZE") {
-    state.phase = "DESPIN";
+  if (!state.won && !state.failed) {
+    if (stability >= 1 && state.phase !== "REMOVE") {
+      state.phase = "REMOVE";
+      messages.push({ text: "ATTITUDE LOCK", life: 1.4, color: "#68ffa6" });
+      state.score += 1600 * (state.scoreMul || 1);
+    } else if (stability > 0.25 && state.phase === "DESPIN") {
+      state.phase = "STABILIZE";
+    } else if (stability <= 0.03 && state.phase === "STABILIZE") {
+      state.phase = "DESPIN";
+    }
   }
 
   // Deorbit progress: only along-track (retrograde) Δv lowers the orbit. The
@@ -1679,10 +1681,14 @@ function drawOrbitMap() {
   ctx.restore();
 }
 
-// Hill-frame (R-V plane) map: the canonical relative-motion picture. Shows the
-// debris trail, the exact one-orbit-ahead CW prediction (ghost), the reference
-// orbit line, and the disposal target line. The prediction's lowest radial
-// point IS δr_p, so "ghost dips below the disposal line" = the win condition.
+// Hill-frame (R-V plane) map: the canonical chief-deputy relative-motion
+// picture. The origin is the unforced "chief" — the debris' original slot on
+// the reference circular orbit — NOT the physical chaser: the chaser thrusts
+// to station-keep, and a thrusting body is not a valid CW frame origin (and
+// debris-minus-chaser would collapse to the ~1 m tracking error anyway).
+// Shows the debris trail, the exact one-orbit-ahead CW prediction (ghost),
+// the reference orbit line, and the disposal target line. The prediction's
+// lowest radial point IS δr_p, so "ghost dips below the disposal line" = win.
 function drawHillMap() {
   if (!state) return;
   const size = Math.min(230, Math.min(width, height) * 0.34);
@@ -1711,7 +1717,6 @@ function drawHillMap() {
   for (const p of pred) include(p.x, p.y);
   for (const t of state.trailRel) include(t.x, t.y);
   include(rel.x, rel.y);
-  include(state.chaser.x, state.chaser.y);
   const goalX = -state.goalDp;
   const showGoal = state.phase === "REMOVE" || state.won ||
     state.perigeeDelta <= -0.3 * state.goalDp;
@@ -1832,9 +1837,15 @@ function drawHillMap() {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Chaser (cyan square) and debris (amber dot).
-  ctx.fillStyle = "#48f3ff";
-  ctx.fillRect(px(state.chaser.y) - 2.5, py(state.chaser.x) - 2.5, 5, 5);
+  // Chief (origin cross: the debris' original orbit slot) and debris (amber dot).
+  ctx.strokeStyle = "rgba(232, 251, 255, 0.85)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(px(0) - 4, py(0));
+  ctx.lineTo(px(0) + 4, py(0));
+  ctx.moveTo(px(0), py(0) - 4);
+  ctx.lineTo(px(0), py(0) + 4);
+  ctx.stroke();
   ctx.fillStyle = "#ffd166";
   ctx.beginPath();
   ctx.arc(px(rel.y), py(rel.x), 3.4, 0, TAU);
@@ -2741,9 +2752,16 @@ if (ui.failRetryButton) {
 window.addEventListener("resize", resize);
 
 // Inspection hook for tests/debugging (the game itself never reads this).
+// step(dt) advances one frame manually — rAF is suspended in hidden tabs.
 window.LABS = {
   get state() { return state; },
   get mode() { return currentMode; },
+  step(dtWall = 1 / 60) {
+    update(dtWall);
+    draw();
+    updateHud();
+    checkResultOverlays();
+  },
   cwPropagate,
   orbitReadouts,
   PHYS,
