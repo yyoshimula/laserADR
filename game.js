@@ -44,6 +44,7 @@ const ui = {
   winEnergy: document.getElementById("winEnergy"),
   winDv: document.getElementById("winDv"),
   winPerigee: document.getElementById("winPerigee"),
+  winEff: document.getElementById("winEff"),
   retryButton: document.getElementById("retryButton"),
   failOverlay: document.getElementById("failOverlay"),
   failReason: document.getElementById("failReason"),
@@ -553,6 +554,11 @@ function resetGame() {
     deltaA: 0,
     oscAmp: 0,
     perigeeDelta: 0,
+    // Cumulative laser Δv split: v = along-track (negative = retrograde, the
+    // only component that changes orbit energy), r = radial (+zenith), h =
+    // cross-track. liveSplit is the smoothed per-shot fraction for the HUD.
+    dvSplit: { v: 0, r: 0, h: 0 },
+    liveSplit: { v: 0, r: 0, h: 0, mag: 0 },
     // Debris relative state in the Hill frame of the reference orbit [m, m/s].
     rel: {
       x: 0,
@@ -899,10 +905,26 @@ function applyLaser(dtGame, dtPhys) {
   // on the debris is along −normal (away from the laser).
   // World px axes: +x = +V (along-track), +y = -R (nadir), +z = +H.
   const dvSI = (LASER_THRUST_N * outwardScore / debris.massKg) * dtPhys;
-  state.rel.vy -= hit.normal3D.x * dvSI;   // along-track (+prograde)
-  state.rel.vx += hit.normal3D.y * dvSI;   // radial (+zenith); world +y is nadir
-  state.rel.vz -= hit.normal3D.z * dvSI;   // cross-track
+  const dvV = -hit.normal3D.x * dvSI;      // along-track (+prograde)
+  const dvR = hit.normal3D.y * dvSI;       // radial (+zenith); world +y is nadir
+  const dvH = -hit.normal3D.z * dvSI;      // cross-track
+  state.rel.vy += dvV;
+  state.rel.vx += dvR;
+  state.rel.vz += dvH;
   debris.dv += dvSI;
+
+  // Δv decomposition bookkeeping. Only the along-track component changes the
+  // orbit energy (δa) — the split shows where each shot's Δv actually went.
+  state.dvSplit.v += dvV;
+  state.dvSplit.r += dvR;
+  state.dvSplit.h += dvH;
+  const live = state.liveSplit;
+  const k = clamp(dtGame * 9, 0, 1);
+  live.v = lerp(live.v, dvV / dvSI, k);
+  live.r = lerp(live.r, dvR / dvSI, k);
+  live.h = lerp(live.h, dvH / dvSI, k);
+  live.mag = lerp(live.mag, 1, k);
+  const retroFrac = -dvV / dvSI;
 
   // Attitude: stylized impulse magnitude (game-time pacing — real despin and
   // deorbit timescales are orders of magnitude apart), honest geometry/signs.
@@ -926,7 +948,7 @@ function applyLaser(dtGame, dtPhys) {
   const brakeBias = -Math.sign(debris.omega || 1) * Math.sign(tauZ || 1);
   const quality = brakeBias > 0 ? 1.0 : -0.35;
   state.score = Math.max(0, state.score + Math.floor((60 * outwardScore * quality + 18) * dtGame * 60 * (state.scoreMul || 1)));
-  state.lastHit = { ...hit, forceDir: hit.normal, quality };
+  state.lastHit = { ...hit, forceDir: hit.normal, quality, retroFrac };
 
   if (Math.abs(debris.omega) < spinBefore || quality > 0) {
     addParticles(hit, hit.normal, outwardScore);
@@ -1002,6 +1024,11 @@ function update(dtWall) {
 
   updateSunModel(dtPhys);
   applyLaser(dtGame, dtPhys);
+
+  // Fade the live Δv-split bars when the beam is off target.
+  if (!state.lastHit || state.lastHit.miss) {
+    state.liveSplit.mag = lerp(state.liveSplit.mag, 0, clamp(dtGame * 5, 0, 1));
+  }
 
   const solarFactor = 0.18 + 0.82 * state.sun.illumination;
   state.energy = clamp(state.energy + dtGame * 0.021 * solarFactor, 0, 1);
@@ -1693,9 +1720,13 @@ function drawHillMap() {
   if (!state) return;
   const size = Math.min(230, Math.min(width, height) * 0.34);
   const pad = 14;
+  const splitH = 58;   // Δv-split widget strip below the plot
   const x0 = width - size - pad;
-  // Anchor above the deck, but never under the right-hand HUD column.
-  const y0 = Math.max(height * 0.46, height * 0.82 - size - pad);
+  // Sit right below the right-hand HUD column (it shares this corner), but
+  // keep the whole panel on screen.
+  const hudRight = document.querySelector(".hud-right");
+  const hudBottom = hudRight ? hudRight.getBoundingClientRect().bottom : height * 0.46;
+  const y0 = clamp(hudBottom + 8, height * 0.34, height - (size + splitH) - 18);
   const rel = state.rel;
 
   // Ghost prediction: one orbit ahead via the closed-form CW solution.
@@ -1743,8 +1774,12 @@ function drawHillMap() {
   ctx.strokeStyle = "rgba(72, 243, 255, 0.32)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.rect(x0, y0, size, size);
+  ctx.rect(x0, y0, size, size + splitH);
   ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x0, y0 + size);
+  ctx.lineTo(x0 + size, y0 + size);
   ctx.stroke();
 
   const scale = size / 140;
@@ -1876,6 +1911,74 @@ function drawHillMap() {
   ctx.setLineDash([]);
   ctx.fillStyle = "rgba(140, 169, 173, 0.8)";
   ctx.fillText("1 ORBIT PRED", x0 + size - 8, barY + 3);
+  ctx.restore();
+
+  drawDvSplit(x0, y0 + size, size, splitH, tinyFont);
+}
+
+// Δv decomposition strip: live per-shot split (center-zero bars) + cumulative
+// totals. Teaches that only the −V (retrograde) component deorbits — radial
+// and cross-track leakage just pumps the bounded relative oscillation.
+function drawDvSplit(x0, y0, w, h, tinyFont) {
+  const live = state.liveSplit;
+  const sp = state.dvSplit;
+  const rows = [
+    { label: "V", val: live.v, sum: sp.v, good: live.v < 0,
+      color: live.v < 0 ? "rgba(104, 255, 166, 0.9)" : "rgba(255, 82, 104, 0.9)" },
+    { label: "R", val: live.r, sum: sp.r, color: "rgba(255, 209, 102, 0.85)" },
+    { label: "H", val: live.h, sum: sp.h, color: "rgba(150, 190, 210, 0.85)" }
+  ];
+  const rowH = (h - 14) / 3;
+  const barX0 = x0 + 22;
+  const barX1 = x0 + w - 64;
+  const cx = (barX0 + barX1) / 2;
+  const half = (barX1 - barX0) / 2;
+
+  ctx.save();
+  ctx.font = `700 ${tinyFont}px ui-sans-serif, system-ui`;
+  ctx.fillStyle = "rgba(140, 169, 173, 0.9)";
+  ctx.textAlign = "left";
+  ctx.fillText("Δv SPLIT", x0 + 8, y0 + 10);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "rgba(104, 255, 166, 0.75)";
+  ctx.fillText("V<0 = DEORBIT", x0 + w - 8, y0 + 10);
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const cy = y0 + 16 + i * rowH + rowH / 2;
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(232, 251, 255, 0.75)";
+    ctx.fillText(r.label, x0 + 9, cy + 3);
+    // zero tick + rail
+    ctx.strokeStyle = "rgba(140, 169, 173, 0.25)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(barX0, cy);
+    ctx.lineTo(barX1, cy);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(232, 251, 255, 0.45)";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 4);
+    ctx.lineTo(cx, cy + 4);
+    ctx.stroke();
+    // live bar (signed, scaled by current beam fraction)
+    const len = clamp(r.val, -1, 1) * half * (state.liveSplit.mag || 0);
+    if (Math.abs(len) > 0.5) {
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + len, cy);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    // cumulative total
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(140, 169, 173, 0.9)";
+    const sum = r.sum;
+    const txt = Math.abs(sum) >= 0.995 ? `${sum.toFixed(2)}m/s` : `${(sum * 1000).toFixed(0)}mm/s`;
+    ctx.fillText(`Σ${sum > 0 ? "+" : ""}${txt}`, x0 + w - 8, cy + 3);
+  }
   ctx.restore();
 }
 
@@ -2398,6 +2501,20 @@ function drawDebris() {
     ctx.beginPath();
     ctx.arc(hit.point.x - hit.normal.x * 44, hit.point.y - hit.normal.y * 44, 3.5, 0, TAU);
     ctx.fill();
+    // During REMOVE, tag the hit with how much of this shot's Δv is actually
+    // retrograde — the only part that lowers the orbit.
+    if (state.phase === "REMOVE" && hit.retroFrac !== undefined) {
+      const pct = Math.round(hit.retroFrac * 100);
+      ctx.font = "800 11px ui-sans-serif, system-ui";
+      ctx.textAlign = "left";
+      ctx.fillStyle = pct >= 70 ? "#68ffa6" : pct >= 40 ? "#ffd166" : "#ff5268";
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.lineWidth = 3;
+      const tx = hit.point.x + 14;
+      const ty = hit.point.y - 14;
+      ctx.strokeText(`RETRO ${pct}%`, tx, ty);
+      ctx.fillText(`RETRO ${pct}%`, tx, ty);
+    }
     ctx.restore();
   }
 }
@@ -2697,6 +2814,10 @@ function showWinOverlay() {
   ui.winEnergy.textContent = `${Math.round(state.energy * 100)}%`;
   if (ui.winDv) ui.winDv.textContent = `${state.debris.dv.toFixed(2)} m/s`;
   if (ui.winPerigee) ui.winPerigee.textContent = fmtMeters(state.perigeeDelta);
+  if (ui.winEff) {
+    const eff = state.debris.dv > 0 ? Math.max(0, -state.dvSplit.v) / state.debris.dv : 0;
+    ui.winEff.textContent = `${Math.round(eff * 100)}%`;
+  }
   ui.winOverlay.hidden = false;
 }
 
