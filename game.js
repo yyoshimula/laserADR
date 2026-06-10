@@ -138,12 +138,17 @@ let laserPower = 1;
 const WARP_STEPS = [1, 4, 16];
 let timeWarpFactor = 1;
 
-const MODE_TYPES = ["realism", "arcade"];
-const MODE_LABELS = { realism: "REALISM", arcade: "ARCADE" };
-// realism: lossless orbit dynamics + finite station-keeping fuel.
+const MODE_TYPES = ["realism", "expert", "arcade"];
+const MODE_LABELS = { realism: "REALISM", expert: "EXPERT", arcade: "ARCADE" };
+// realism: lossless orbit dynamics + finite station-keeping fuel; the chaser
+//          replicates laser Δv as a coordinated feed-forward maneuver.
+// expert:  realism + thrust inhibit while the beam is on — lasing requires
+//          precision pointing, so the chaser coasts ballistically during a
+//          burst and must catch up (PD only, no feed-forward) between pulses.
 // arcade:  gentle artificial damping + unlimited fuel (assist mode).
 const MODES = {
   realism: { damping: false, fuelBudget: 8 },
+  expert:  { damping: false, fuelBudget: 8, thrustInhibit: true },
   arcade:  { damping: true,  fuelBudget: Infinity }
 };
 let currentMode = "realism";
@@ -268,6 +273,11 @@ const LESSONS = {
     title: "姿勢ロック",
     body: "回転が止まった姿勢はこの先凍結される。平らな面が正面(手前)を向いた状態で止めるほど、逆行押しの RETRO% が高くなる。",
     formula: "Δv ∥ −n̂(ヒット面法線の逆)"
+  },
+  inhibit: {
+    title: "照射中はスラスタ禁止 (EXPERT)",
+    body: "ビーム照射中のチェイサーは精密指向のため軌道マヌーバできず、慣性飛行で流される。撃つほどターゲットはレチクルから滑っていく — 短いパルスで撃ち、合間に再追従させろ。",
+    formula: "beam ON: u_chaser = 0(弾道飛行)"
   },
   epicycle: {
     title: "これがHCWの自然運動",
@@ -1010,6 +1020,8 @@ function resetGame() {
     crossAz0: 0,
     aimPreview: null,
     lastLaserDv: null,
+    beamOnFrame: false,
+    inhibitTime: 0,
     // Debris relative state in the Hill frame of the reference orbit [m, m/s].
     rel: {
       x: 0,
@@ -1369,6 +1381,7 @@ function addParticles(hit, forceDir, intensity) {
 
 function applyLaser(dtGame, dtPhys) {
   const canFire = pointer.firing && state.energy > 0.02 && state.heat < 0.99 && !state.won && !state.failed;
+  state.beamOnFrame = canFire;
   if (!canFire) {
     state.lastHit = null;
     sfx.laserOff();
@@ -1605,6 +1618,11 @@ function update(dtWall) {
   applyLaser(dtGame, dtPhys);
   updateAimPreview();
 
+  if (mode.thrustInhibit && state.beamOnFrame) {
+    state.inhibitTime += dtGame;
+    if (state.inhibitTime > 1.5) triggerLesson("inhibit");
+  }
+
   // Fade the live Δv-split bars when the beam is off target.
   if (!state.lastHit || state.lastHit.miss) {
     state.liveSplit.mag = lerp(state.liveSplit.mag, 0, clamp(dtGame * 5, 0, 1));
@@ -1639,9 +1657,14 @@ function update(dtWall) {
     let dvUsed = ch0.dvUsed || 0;
     let ff = state.lastLaserDv;
     state.lastLaserDv = null;
+    // EXPERT: no coordinated feed-forward at all, and zero thrust while the
+    // beam is on — the chaser coasts through every burst and pays for the
+    // catch-up afterwards with plain PD corrections.
+    const inhibited = mode.thrustInhibit && state.beamOnFrame;
+    if (mode.thrustInhibit) ff = null;
     const nSub = Math.max(1, Math.ceil(dtPhys / 2.5));
     const dtSub = dtPhys / nSub;
-    const active = !state.won && !state.failed;
+    const active = !state.won && !state.failed && !inhibited;
     for (let i = 0; i < nSub; i++) {
       const chNext = cwPropagate(chSt, dtSub);
       // Track the debris where it actually is at this sub-instant, not at the
@@ -3401,7 +3424,23 @@ function draw() {
   drawAimPreview();
   drawReticle();
   drawTimeWarpIndicator();
+  drawThrustInhibitIndicator();
   drawMessages();
+}
+
+function drawThrustInhibitIndicator() {
+  const mode = MODES[currentMode] || MODES.realism;
+  if (!mode.thrustInhibit || !state.beamOnFrame) return;
+  ctx.save();
+  ctx.font = "800 12px ui-sans-serif, system-ui";
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(255, 209, 102, 0.95)";
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.lineWidth = 4;
+  const label = "⛔ THRUST INHIBIT — チェイサー慣性飛行中";
+  ctx.strokeText(label, width * 0.5, height * 0.145);
+  ctx.fillText(label, width * 0.5, height * 0.145);
+  ctx.restore();
 }
 
 function drawTimeWarpIndicator() {

@@ -44,7 +44,8 @@ Orbital debris removal simulator — laser ablation + HCW (Hill-Clohessy-Wiltshi
 
 | Mode | 内容 |
 | --- | --- |
-| REALISM (既定) | 減衰なしの無損失軌道力学。チェイサー燃料 8 m/s の制約付き |
+| REALISM (既定) | 減衰なしの無損失軌道力学。チェイサー燃料 8 m/s。レーザー Δv はチェイサーが協調マヌーバで即時追従(フィードフォワード) |
+| EXPERT | REALISM + **照射中はチェイサーのスラスタ禁止**(精密指向のため慣性飛行)。撃つほどターゲットが流れるので、短パルス → 再追従の往復が必須。補正は PD のみで燃費も悪化 |
 | ARCADE | 緩い人工減衰 + 燃料無制限のアシストモード |
 
 ## TRAINING PROGRAM(キャンペーン)
