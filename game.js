@@ -147,8 +147,8 @@ const MODE_LABELS = { realism: "REALISM", expert: "EXPERT", arcade: "ARCADE" };
 //          burst and must catch up (PD only, no feed-forward) between pulses.
 // arcade:  gentle artificial damping + unlimited fuel (assist mode).
 const MODES = {
-  realism: { damping: false, fuelBudget: 8 },
-  expert:  { damping: false, fuelBudget: 8, thrustInhibit: true },
+  realism: { damping: false, fuelBudget: 8, deadband: true },
+  expert:  { damping: false, fuelBudget: 8, deadband: true, thrustInhibit: true },
   arcade:  { damping: true,  fuelBudget: Infinity }
 };
 let currentMode = "realism";
@@ -1022,6 +1022,11 @@ function resetGame() {
     lastLaserDv: null,
     beamOnFrame: false,
     inhibitTime: 0,
+    // Dead-band station-keeping: the chaser thrusts only when the formation
+    // error leaves this box, so the debris visibly rides its natural CW
+    // relative motion inside it (real station-keeping works the same way).
+    skBox: standoffM * 0.18,
+    chaserEngaged: false,
     // Debris relative state in the Hill frame of the reference orbit [m, m/s].
     rel: {
       x: 0,
@@ -1684,15 +1689,34 @@ function update(dtWall) {
           if (Number.isFinite(state.fuel)) state.fuel = Math.max(0, state.fuel - ffMag);
           ff = null;
         }
-        const ux = clamp(CHASER.kp * (ref.x - chNext.x) + CHASER.kd * (ref.vx - chNext.vx), -CHASER.uMax, CHASER.uMax);
-        const uy = clamp(CHASER.kp * (ref.y + state.standoffM - chNext.y) + CHASER.kd * (ref.vy - chNext.vy), -CHASER.uMax, CHASER.uMax);
-        const uz = clamp(CHASER.kp * (ref.z - chNext.z) + CHASER.kd * (ref.vz - chNext.vz), -CHASER.uMax, CHASER.uMax);
-        chNext.vx += ux * dtSub;
-        chNext.vy += uy * dtSub;
-        chNext.vz += uz * dtSub;
-        const used = Math.hypot(ux, uy, uz) * dtSub;
-        dvUsed += used;
-        if (Number.isFinite(state.fuel)) state.fuel = Math.max(0, state.fuel - used);
+        // Dead-band control: thrust only once the formation error leaves the
+        // station-keeping box (hysteresis so the thrusters don't chatter).
+        // Inside the box the chaser coasts and the debris rides its natural
+        // CW relative motion — that wander is real orbital dynamics on screen.
+        const ex = ref.x - chNext.x;
+        const ey = ref.y + state.standoffM - chNext.y;
+        const ez = ref.z - chNext.z;
+        const evx = ref.vx - chNext.vx;
+        const evy = ref.vy - chNext.vy;
+        const evz = ref.vz - chNext.vz;
+        if (mode.deadband) {
+          const eMag = Math.hypot(ex, ey, ez);
+          if (!state.chaserEngaged && eMag > state.skBox) state.chaserEngaged = true;
+          else if (state.chaserEngaged && eMag < state.skBox * 0.3 && Math.hypot(evx, evy, evz) < 0.004) state.chaserEngaged = false;
+        } else {
+          state.chaserEngaged = true;
+        }
+        if (state.chaserEngaged) {
+          const ux = clamp(CHASER.kp * ex + CHASER.kd * evx, -CHASER.uMax, CHASER.uMax);
+          const uy = clamp(CHASER.kp * ey + CHASER.kd * evy, -CHASER.uMax, CHASER.uMax);
+          const uz = clamp(CHASER.kp * ez + CHASER.kd * evz, -CHASER.uMax, CHASER.uMax);
+          chNext.vx += ux * dtSub;
+          chNext.vy += uy * dtSub;
+          chNext.vz += uz * dtSub;
+          const used = Math.hypot(ux, uy, uz) * dtSub;
+          dvUsed += used;
+          if (Number.isFinite(state.fuel)) state.fuel = Math.max(0, state.fuel - used);
+        }
       }
       chSt = chNext;
     }
@@ -3419,6 +3443,7 @@ function draw() {
   drawParticles();
   drawEclipseTint();
   drawSatelliteFrame();
+  drawStationKeepingBox();
   drawOrbitMap();
   drawHillMap();
   drawAimPreview();
@@ -3426,6 +3451,28 @@ function draw() {
   drawTimeWarpIndicator();
   drawThrustInhibitIndicator();
   drawMessages();
+}
+
+// Station-keeping box: the chaser only thrusts when the debris' formation
+// error leaves this region — inside it, what you see is pure CW drift.
+function drawStationKeepingBox() {
+  const mode = MODES[currentMode] || MODES.realism;
+  if (!mode.deadband || !state) return;
+  const ppm = state.pxPerM;
+  const half = state.skBox * ppm;
+  const cx = width * 0.5;
+  const cy = state.orbit.centerY;
+  ctx.save();
+  ctx.strokeStyle = state.chaserEngaged ? "rgba(255, 209, 102, 0.4)" : "rgba(72, 243, 255, 0.18)";
+  ctx.setLineDash([4, 7]);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - half, cy - half, half * 2, half * 2);
+  ctx.setLineDash([]);
+  ctx.font = "700 9px ui-sans-serif, system-ui";
+  ctx.textAlign = "left";
+  ctx.fillStyle = state.chaserEngaged ? "rgba(255, 209, 102, 0.75)" : "rgba(140, 169, 173, 0.5)";
+  ctx.fillText(state.chaserEngaged ? "S/K BURN" : "S/K BOX", cx - half + 4, cy - half - 4);
+  ctx.restore();
 }
 
 function drawThrustInhibitIndicator() {
