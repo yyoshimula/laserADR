@@ -43,6 +43,23 @@
           </div>
           <div class="bar"><i id="fuelBar"></i></div>
         </div>
+        <div class="meter">
+          <div class="meter-label">
+            <span>LASER PWR (ホイール)</span>
+            <b id="powerText">100%</b>
+          </div>
+          <div class="bar"><i id="powerBar"></i></div>
+        </div>
+      </section>
+
+      <section class="hud lab-panel" id="labPanel" hidden aria-label="Orbit Lab">
+        <span class="lab-title">ORBIT LAB</span>
+        <button type="button" data-preset="football" title="閉じた2:1楕円 (δa=0)">FOOTBALL</button>
+        <button type="button" data-preset="hop" title="ラジアル・インパルス: 1周回で戻る">RADIAL HOP</button>
+        <button type="button" data-preset="retro" title="逆行プッシュ: 降下しつつ前方へ">RETRO PUSH</button>
+        <button type="button" data-preset="leader" title="同一軌道・前後オフセット">LEADER</button>
+        <button type="button" data-preset="clear" title="原点で静止">CLEAR</button>
+        <button type="button" id="labClose">CLOSE (L)</button>
       </section>
 
       <section class="hud hud-right" aria-label="Target telemetry">
@@ -136,11 +153,18 @@
             <span><kbd>T</kbd>ターゲット切替 (DEBRIS / BOX-WING / ROCKET)</span>
             <span><kbd>D</kbd>難易度切替 (EASY / NORMAL / HARD)</span>
             <span><kbd>M</kbd>物理モード切替 (REALISM: 減衰なし・燃料制限 / ARCADE: アシスト)</span>
+            <span><kbd>ホイール</kbd>レーザー出力 30–100%(低出力 = 熱効率よく微調整)</span>
+            <span><kbd>1/2/3</kbd>タイムワープ ×1/×4/×16(待機用 — 射撃で解除)</span>
+            <span><kbd>L</kbd>Orbit Lab / <kbd>S</kbd>サウンド ON/OFF</span>
           </div>
           <button id="startButton" type="button">START MISSION (FREE PLAY)</button>
           <div class="campaign-block">
             <div class="campaign-label">TRAINING PROGRAM — 1レベル = 1概念(クリアで次が解放)</div>
             <div class="campaign-buttons" id="campaignButtons"></div>
+          </div>
+          <div class="campaign-block">
+            <div class="campaign-label">SANDBOX — 任意のΔvでCW相対運動を実験</div>
+            <div class="campaign-buttons"><button type="button" id="labButton">ORBIT LAB (L)</button></div>
           </div>
         </div>
       </div>

@@ -35,6 +35,10 @@ Orbital debris removal simulator — laser ablation + HCW (Hill-Clohessy-Wiltshi
 | `T` | ターゲット切替 (DEBRIS / BOX-WING / ROCKET) |
 | `D` | 難易度切替 (EASY / NORMAL / HARD) |
 | `M` | 物理モード切替 (REALISM / ARCADE) |
+| ホイール | レーザー出力 30–100%(低出力 = 熱効率よく微調整) |
+| `1` / `2` / `3` | タイムワープ ×1 / ×4 / ×16(待機用 — 射撃で解除) |
+| `L` | Orbit Lab(CWサンドボックス) |
+| `S` | サウンド ON/OFF |
 
 ### 物理モード
 
@@ -54,6 +58,7 @@ Orbital debris removal simulator — laser ablation + HCW (Hill-Clohessy-Wiltshi
 | L3 · デオービット | 逆行 Δv = 軌道エネルギー低下 | フルミッション −2.0 km |
 | L4 · クロストラック | z̈ = −n²z の独立振動と位相 | 横振動 Az < 25 m |
 | L5 · エクリプス・ラン | 食とエネルギー収支 | 残量 50% で −0.8 km |
+| L6 · フラットスピン | オイラー方程式・歳差(回転軸が暴れる) | ロケットを止めて −0.4 km |
 
 ## スコアとランク
 
@@ -61,6 +66,10 @@ Orbital debris removal simulator — laser ablation + HCW (Hill-Clohessy-Wiltshi
 デブリーフ画面には R–V 面の全行程軌跡、Δv の方向別内訳、CW の公式に実数値を代入した解説が表示される。ベストスコアは(レベル or ターゲット×難易度×モード)ごとに localStorage に保存。
 
 初見のプレイ中イベント(ラジアル押し・食・燃料低下など)では 1 回限りのマイクロ解説カードが表示される(既読も localStorage 管理)。
+
+## ORBIT LAB(サンドボックス)
+
+`L` キーまたはタイトル画面から起動。ヒル座標面のマーカーをドラッグで任意の Δv を印加し、CW 閉形式解による 2 周回の厳密予測と実軌跡を観察できる。プリセット: FOOTBALL(閉じた 2:1 楕円, δa=0)/ RADIAL HOP(1 周回で戻る)/ RETRO PUSH(降下 + 前方ドリフトのサイクロイド)/ LEADER(同一軌道前後)。δa・A・δr_p・永年ドリフト(−3πδa /orbit)を常時表示。
 
 ### ターゲット
 
@@ -86,6 +95,7 @@ Orbital debris removal simulator — laser ablation + HCW (Hill-Clohessy-Wiltshi
 - **CW 閉形式解(状態遷移行列)**: 毎フレームの伝播は Clohessy-Wiltshire 方程式の解析解で厳密(積分誤差ゼロ)。同じ関数で R–V 面マップの「1 周回先ゴースト予測」を生成
 - **軌道要素リードアウト**: δa = 4x + 2ẏ/n(半長軸差)、近地点変化 δr_p = δa − A(A は動径振動振幅)。勝利条件は δr_p ≤ −目標値で、R–V 面の予測軌道がディスポーザル線に届く条件と数学的に同値
 - **チェイサーのステーションキーピング**: チェイサー(カメラ)は PD 制御でデブリに追従し、消費 Δv を燃料として表示。REALISM では枯渇 = 失敗
+- **剛体姿勢力学(オイラー方程式)**: 姿勢はクォータニオン + 体軸 3 主慣性モーメントで伝播。ジャイロ結合 (I_y−I_z)ω_yω_z … により、不定形デブリは中間軸まわりでカオス的に転がり(ジャニベコフ効果)、軸対称なロケット上段は歳差運動する。トルクは `τ = r × F` を体軸へ変換して印加(回転の時間スケールのみゲーム用に様式化)
 - **Laser ablation impulse**: ヒット面の法線方向にアブレーションジェット、反作用でデブリに −法線方向の推力(コサイン入射則)。推力 0.12 N は文献推定(mN 級)の約 100 倍にスケール(ゲームペーシングのため)。質量(220–2600 kg)と力学は実規模。姿勢回転のみゲーム時間で様式化(幾何・`r × F` トルクの符号は正確)
 - **Sun-synchronous orbit**: 高度 600 km、傾斜角 97.8°、LTAN 10:30、β=22°
 - **Earth texture**: NASA Blue Marble (8192×4096 equirectangular) をレイトレースで球面サンプリング、バイリニア補間でアンチエイリアシング
