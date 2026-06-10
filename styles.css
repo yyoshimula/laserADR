@@ -536,3 +536,138 @@ button {
     width: min(300px, calc(100vw - 24px));
   }
 }
+
+/* --- Sprint 2: micro-lessons, training program, debrief --- */
+
+.lesson-card {
+  position: absolute;
+  left: 18px;
+  bottom: 118px;
+  width: 312px;
+  padding: 12px 14px;
+  background: rgba(3, 16, 20, 0.94);
+  border: 1px solid rgba(72, 243, 255, 0.4);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  z-index: 40;
+}
+
+.lesson-card b {
+  display: block;
+  margin: 0 18px 6px 0;
+  font-size: 13px;
+  color: var(--cyan);
+  letter-spacing: 0.5px;
+}
+
+.lesson-card p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.lesson-card code {
+  display: block;
+  font-size: 12px;
+  color: var(--green);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.lesson-card button {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.campaign-block {
+  margin-top: 16px;
+}
+
+.campaign-label {
+  margin-bottom: 8px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.campaign-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.overlay-card .campaign-buttons button {
+  flex: 1;
+  width: auto;
+  padding: 9px 0;
+  font-size: 12px;
+  letter-spacing: 1px;
+  border-color: var(--amber);
+  background: linear-gradient(180deg, rgba(255, 209, 102, 0.16), rgba(255, 209, 102, 0.05));
+}
+
+.overlay-card .campaign-buttons button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: rgba(140, 169, 173, 0.5);
+  background: none;
+}
+
+.overlay-rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 4px 0 12px;
+}
+
+.overlay-rank b {
+  font-size: 42px;
+  font-weight: 900;
+  color: var(--green);
+  line-height: 1;
+}
+
+.overlay-rank span {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+}
+
+#debriefCanvas,
+#debriefCanvasFail {
+  width: 100%;
+  height: auto;
+  margin: 0 0 10px;
+  border: 1px solid rgba(72, 243, 255, 0.25);
+  background: rgba(2, 10, 14, 0.85);
+}
+
+.debrief-notes {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #b9d4d8;
+  white-space: pre-line;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.best-line {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--amber);
+}
+
+#nextLevelButton {
+  margin-bottom: 10px;
+  border-color: var(--cyan) !important;
+}

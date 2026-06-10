@@ -103,6 +103,13 @@
         <div class="keyline" id="guidanceText">GUIDANCE VECTOR NOMINAL</div>
       </section>
 
+      <aside class="lesson-card" id="lessonCard" hidden aria-live="polite">
+        <button id="lessonClose" type="button" aria-label="閉じる">&times;</button>
+        <b id="lessonTitle"></b>
+        <p id="lessonBody"></p>
+        <code id="lessonFormula"></code>
+      </aside>
+
       <div class="overlay" id="introOverlay" role="dialog" aria-modal="true" aria-labelledby="introTitle">
         <div class="overlay-card">
           <div class="overlay-eyebrow">LASER ABLATION DEBRIS STABILIZER</div>
@@ -130,15 +137,22 @@
             <span><kbd>D</kbd>難易度切替 (EASY / NORMAL / HARD)</span>
             <span><kbd>M</kbd>物理モード切替 (REALISM: 減衰なし・燃料制限 / ARCADE: アシスト)</span>
           </div>
-          <button id="startButton" type="button">START MISSION</button>
+          <button id="startButton" type="button">START MISSION (FREE PLAY)</button>
+          <div class="campaign-block">
+            <div class="campaign-label">TRAINING PROGRAM — 1レベル = 1概念(クリアで次が解放)</div>
+            <div class="campaign-buttons" id="campaignButtons"></div>
+          </div>
         </div>
       </div>
 
       <div class="overlay overlay-result" id="winOverlay" role="dialog" aria-modal="true" hidden>
         <div class="overlay-card overlay-card-result">
           <div class="overlay-eyebrow success">MISSION CLEARED</div>
-          <h1>DEBRIS TRANSFER CONFIRMED</h1>
-          <p class="overlay-lede">デブリを回収軌道へ送出。任務完了。</p>
+          <h1 id="winTitle">DEBRIS TRANSFER CONFIRMED</h1>
+          <div class="overlay-rank">
+            <b id="winRank">-</b>
+            <span id="winRankDetail"></span>
+          </div>
           <div class="overlay-stats">
             <div><span>FINAL SCORE</span><b id="winScore">000000</b></div>
             <div><span>ENERGY LEFT</span><b id="winEnergy">0%</b></div>
@@ -146,6 +160,10 @@
             <div><span>PERIGEE &Delta;</span><b id="winPerigee">0 m</b></div>
             <div><span>RETRO EFF.</span><b id="winEff">0%</b></div>
           </div>
+          <canvas id="debriefCanvas" width="540" height="190"></canvas>
+          <p class="debrief-notes" id="debriefNotes"></p>
+          <p class="best-line" id="winBest"></p>
+          <button id="nextLevelButton" type="button" hidden>NEXT LEVEL &#9654;</button>
           <button id="retryButton" type="button">NEW RUN</button>
         </div>
       </div>
@@ -155,6 +173,11 @@
           <div class="overlay-eyebrow danger">MISSION FAILED</div>
           <h1>UNCONTROLLED REENTRY</h1>
           <p class="overlay-lede" id="failReason">回転を止めないまま大気圏へ突入 — デブリは回収不能。</p>
+          <div class="overlay-stats">
+            <div><span>&Delta;v IMPARTED</span><b id="failDv">0.00 m/s</b></div>
+            <div><span>PERIGEE &Delta;</span><b id="failPerigee">0 m</b></div>
+          </div>
+          <canvas id="debriefCanvasFail" width="540" height="190"></canvas>
           <button id="failRetryButton" type="button">RETRY</button>
         </div>
       </div>

@@ -40,15 +40,31 @@ const ui = {
   introOverlay: document.getElementById("introOverlay"),
   startButton: document.getElementById("startButton"),
   winOverlay: document.getElementById("winOverlay"),
+  winTitle: document.getElementById("winTitle"),
   winScore: document.getElementById("winScore"),
   winEnergy: document.getElementById("winEnergy"),
   winDv: document.getElementById("winDv"),
   winPerigee: document.getElementById("winPerigee"),
   winEff: document.getElementById("winEff"),
+  winRank: document.getElementById("winRank"),
+  winRankDetail: document.getElementById("winRankDetail"),
+  winBest: document.getElementById("winBest"),
+  debriefCanvas: document.getElementById("debriefCanvas"),
+  debriefNotes: document.getElementById("debriefNotes"),
+  nextLevelButton: document.getElementById("nextLevelButton"),
   retryButton: document.getElementById("retryButton"),
   failOverlay: document.getElementById("failOverlay"),
   failReason: document.getElementById("failReason"),
-  failRetryButton: document.getElementById("failRetryButton")
+  failDv: document.getElementById("failDv"),
+  failPerigee: document.getElementById("failPerigee"),
+  debriefCanvasFail: document.getElementById("debriefCanvasFail"),
+  failRetryButton: document.getElementById("failRetryButton"),
+  lessonCard: document.getElementById("lessonCard"),
+  lessonTitle: document.getElementById("lessonTitle"),
+  lessonBody: document.getElementById("lessonBody"),
+  lessonFormula: document.getElementById("lessonFormula"),
+  lessonClose: document.getElementById("lessonClose"),
+  campaignButtons: document.getElementById("campaignButtons")
 };
 
 const TAU = Math.PI * 2;
@@ -116,6 +132,142 @@ const MODES = {
   arcade:  { damping: true,  fuelBudget: Infinity }
 };
 let currentMode = "realism";
+
+// --- One-time micro-lessons (plan 2-4), triggered by physics events. Seen
+// state persists in localStorage so they teach once, then stay out of the way.
+const LESSONS = {
+  radial: {
+    title: "ラジアル押しは軌道を下げない",
+    body: "下向きのΔvは閉じた2:1楕円を描いて1周回後に元の高度へ戻るだけ。軌道エネルギー(δa)の式に ẋ は入っていない。下げたいなら正面(手前向き)の面を撃って逆行に押す。",
+    formula: "δa = 4x + 2ẏ/n   (ẋ は不在)"
+  },
+  retro: {
+    title: "逆行Δvが軌道エネルギーを下げる",
+    body: "along-track(−V)成分だけが δa を動かす。600 km LEO では逆行 1 m/s ごとに半長軸が約1.84 km下がる。",
+    formula: "δ(δa) = 2Δv_V / n"
+  },
+  cross: {
+    title: "クロストラックは純粋な無駄",
+    body: "H方向の成分は独立な単振動になるだけで、δa にも近地点にも一切寄与しない。さらにチェイサーの追従燃料も浪費する。",
+    formula: "z̈ = −n²z"
+  },
+  eclipse: {
+    title: "食 (ECLIPSE)",
+    body: "β=22° のSSOでは1周回の約35%が地球の影に入り、太陽発電が止まる。バッテリー残量で撃ち切る配分を考えよう。",
+    formula: "cos η = √(1−(Re/r)²) / cos β"
+  },
+  fuel: {
+    title: "ステーションキーピングのコスト",
+    body: "チェイサーは、あなたが励起した相対ドリフト・振動を燃料で打ち消し続けている。振幅Aを無駄に上げない撃ち方がそのまま燃費になる。",
+    formula: "消費Δv = ∫|u| dt"
+  },
+  lock: {
+    title: "姿勢ロック",
+    body: "回転が止まった姿勢はこの先凍結される。平らな面が正面(手前)を向いた状態で止めるほど、逆行押しの RETRO% が高くなる。",
+    formula: "Δv ∥ −n̂(ヒット面法線の逆)"
+  },
+  epicycle: {
+    title: "これがHCWの自然運動",
+    body: "何も押していないのにデブリは楕円を描いて漂う。相対軌道運動は『ただ漂うだけで曲がる』が本体 — 直線的な直感は通用しない。",
+    formula: "x(t) = δa − A·cos(nt+φ)"
+  }
+};
+let lessonsSeen;
+try {
+  lessonsSeen = new Set(JSON.parse(localStorage.getItem("labs-lessons") || "[]"));
+} catch (err) {
+  lessonsSeen = new Set();
+}
+const lessonQueue = [];
+let lessonHideTimer = null;
+function triggerLesson(id) {
+  if (!LESSONS[id] || lessonsSeen.has(id) || lessonQueue.includes(id)) return;
+  lessonQueue.push(id);
+  pumpLessons();
+}
+function pumpLessons() {
+  if (!ui.lessonCard || !ui.lessonCard.hidden || lessonQueue.length === 0) return;
+  const id = lessonQueue.shift();
+  const l = LESSONS[id];
+  lessonsSeen.add(id);
+  try { localStorage.setItem("labs-lessons", JSON.stringify([...lessonsSeen])); } catch (err) { /* private mode */ }
+  ui.lessonTitle.textContent = l.title;
+  ui.lessonBody.textContent = l.body;
+  ui.lessonFormula.textContent = l.formula || "";
+  ui.lessonFormula.style.display = l.formula ? "" : "none";
+  ui.lessonCard.hidden = false;
+  clearTimeout(lessonHideTimer);
+  lessonHideTimer = setTimeout(hideLessonCard, 16000);
+}
+function hideLessonCard() {
+  if (ui.lessonCard) ui.lessonCard.hidden = true;
+  clearTimeout(lessonHideTimer);
+  lessonHideTimer = setTimeout(pumpLessons, 800);
+}
+
+// --- Training Program campaign (plan 3-1): one CW concept per level. ---
+function lockAttitude(s) {
+  const d = s.debris;
+  d.omega = 0;
+  d.omegaPitch = 0;
+  d.omegaRoll = 0;
+  s.stableHold = 3;
+  s.phase = "REMOVE";
+}
+const CAMPAIGN = [
+  {
+    id: "L1", title: "L1 · DESPIN入門", objective: "despin", target: "debris", par: 90,
+    brief: "デブリの端を撃ち、r×F トルクで回転を止めろ (< 0.16 rad/s を2秒ホールド)。",
+    setup(s) {
+      s.rel.vx = 0; s.rel.vy = 0; s.rel.vz = 0;
+      const d = s.debris;
+      d.omega = 0.9; d.omegaPitch = 0.18; d.omegaRoll = -0.12;
+    }
+  },
+  {
+    id: "L2", title: "L2 · ブーメラン", objective: "perigee", goalDp: 300, target: "debris", par: 110,
+    brief: "近地点を300 m下げろ。どの面を撃てば下がる? — δa メーターが答えを知っている。",
+    setup(s) {
+      lockAttitude(s);
+      s.rel.vx = 0; s.rel.vy = 0; s.rel.vz = 0;
+    }
+  },
+  {
+    id: "L3", title: "L3 · デオービット", objective: "perigee", target: "debris", par: 150,
+    brief: "フルミッション。DESPIN → STABILIZE → 逆行Δvで近地点 −2.0 km。"
+  },
+  {
+    id: "L4", title: "L4 · クロストラック", objective: "cross", goalAz: 25, target: "debris", par: 130,
+    brief: "横(H)方向の振動を 25 m 未満に抑えろ。動きと逆向きに押す — タイミングが全て。",
+    setup(s) {
+      lockAttitude(s);
+      s.rel.vx = 0; s.rel.vy = 0;
+      s.rel.z = 0; s.rel.vz = 0.12;
+    }
+  },
+  {
+    id: "L5", title: "L5 · エクリプス・ラン", objective: "perigee", target: "boxwing", par: 200,
+    brief: "まもなく食に入る。残量50%のバッテリーを配分して近地点 −0.8 km。",
+    setup(s) {
+      s.energy = 0.5;
+      s.orbit.phase = 0.64;   // eclipse entry ~20 s after start
+    }
+  }
+];
+let campaignIndex = null;
+let campaignUnlocked = 0;
+try {
+  campaignUnlocked = parseInt(localStorage.getItem("labs-campaign") || "0", 10) || 0;
+} catch (err) { /* private mode */ }
+function startCampaignLevel(i) {
+  if (i < 0 || i >= CAMPAIGN.length || i > campaignUnlocked) return;
+  campaignIndex = i;
+  currentTargetType = CAMPAIGN[i].target;
+  hideWinOverlay();
+  hideFailOverlay();
+  resetGame();
+  hideIntroOverlay();
+}
 
 // Closed-form Clohessy-Wiltshire propagation (state transition matrix).
 // Exact for the linearized dynamics — no integration error at any dt. Also
@@ -273,11 +425,11 @@ let currentDifficulty = "normal";
 // objects move less per pass, as in real laser-ADR campaign studies.
 // Difficulty multiplies the spin (omega*) and drift (v0) fields.
 const TARGET_BASE = {
-  debris:  { massKg: 220,  radiusM: 1.6, goalDp: 2000, v0: { r: -0.008, v: -0.020, h: 0 },
+  debris:  { massKg: 220,  radiusM: 1.6, goalDp: 2000, par: 140, v0: { r: -0.008, v: -0.020, h: 0 },
              angle: -0.42, pitch: 0.36, roll: -0.22, omega: 1.72, omegaPitch: 0.34, omegaRoll: -0.28, inertia: 240000 },
-  boxwing: { massKg: 700,  radiusM: 3.4, goalDp: 800,  v0: { r: -0.005, v: -0.012, h: 0 },
+  boxwing: { massKg: 700,  radiusM: 3.4, goalDp: 800,  par: 140, v0: { r: -0.005, v: -0.012, h: 0 },
              angle: -0.18, pitch: 0.12, roll: -0.05, omega: 0.95, omegaPitch: 0.18, omegaRoll: -0.12, inertia: 165000 },
-  rocket:  { massKg: 2600, radiusM: 4.6, goalDp: 400,  v0: { r: -0.004, v: -0.008, h: 0 },
+  rocket:  { massKg: 2600, radiusM: 4.6, goalDp: 400,  par: 220, v0: { r: -0.004, v: -0.008, h: 0 },
              angle: -0.30, pitch: 0.06, roll: 0.42,  omega: 1.05, omegaPitch: 0.07, omegaRoll: 0.34,  inertia: 300000 }
 };
 
@@ -559,6 +711,16 @@ function resetGame() {
     // cross-track. liveSplit is the smoothed per-shot fraction for the HUD.
     dvSplit: { v: 0, r: 0, h: 0 },
     liveSplit: { v: 0, r: 0, h: 0, mag: 0 },
+    // Run metrics (plan 3-2): beam-on vs on-target time, physical elapsed time.
+    beamTime: 0,
+    hitTime: 0,
+    physTime: 0,
+    radialPushTime: 0,
+    par: base.par || 140,
+    level: null,
+    winTitle: "",
+    crossAz: 0,
+    crossAz0: 0,
     // Debris relative state in the Hill frame of the reference orbit [m, m/s].
     rel: {
       x: 0,
@@ -609,6 +771,15 @@ function resetGame() {
       dv: 0
     }
   };
+  if (campaignIndex !== null && CAMPAIGN[campaignIndex]) {
+    const lv = CAMPAIGN[campaignIndex];
+    state.level = lv;
+    if (lv.goalDp) state.goalDp = lv.goalDp;
+    if (lv.par) state.par = lv.par;
+    if (lv.setup) lv.setup(state);
+    state.crossAz0 = Math.hypot(state.rel.z, state.rel.vz / PHYS.n);
+    messages.push({ text: lv.title, life: 2.6, color: "#48f3ff" });
+  }
   syncDebrisRender();
 }
 
@@ -889,11 +1060,13 @@ function applyLaser(dtGame, dtPhys) {
 
   state.energy = clamp(state.energy - dtGame * 0.058, 0, 1);
   state.heat = clamp(state.heat + dtGame * 0.22, 0, 1.05);
+  state.beamTime += dtGame;
   const hit = findLaserHit();
   if (!hit) {
     state.lastHit = { miss: true, dir: null, point: { x: pointer.x, y: pointer.y } };
     return;
   }
+  state.hitTime += dtGame;
 
   const debris = state.debris;
   // outwardScore: how square the beam strikes the surface (0 = grazing, 1 = perpendicular).
@@ -925,6 +1098,14 @@ function applyLaser(dtGame, dtPhys) {
   live.h = lerp(live.h, dvH / dvSI, k);
   live.mag = lerp(live.mag, 1, k);
   const retroFrac = -dvV / dvSI;
+
+  // Micro-lesson triggers tied to what the player is actually doing.
+  if (retroFrac > 0.7 && state.phase === "REMOVE") triggerLesson("retro");
+  if (Math.abs(dvR) / dvSI > 0.6) {
+    state.radialPushTime += dtGame;
+    if (state.radialPushTime > 1) triggerLesson("radial");
+  }
+  if (Math.abs(state.dvSplit.h) > 0.08) triggerLesson("cross");
 
   // Attitude: stylized impulse magnitude (game-time pacing — real despin and
   // deorbit timescales are orders of magnitude apart), honest geometry/signs.
@@ -1019,6 +1200,7 @@ function update(dtWall) {
   const dtGame = dtWall * TIME_SCALE;   // stylized clock: attitude, heat, FX
   const dtPhys = dtWall * TIME_WARP;    // physical seconds: orbit dynamics, sun
   state.time += dtGame;
+  state.physTime += dtPhys;
   const debris = state.debris;
   const mode = MODES[currentMode] || MODES.realism;
 
@@ -1097,8 +1279,13 @@ function update(dtWall) {
   if (state.trailTimer <= 0) {
     state.trailTimer = 0.3;
     state.trailRel.push({ x: rel.x, y: rel.y });
-    if (state.trailRel.length > 420) state.trailRel.shift();
+    if (state.trailRel.length > 2400) state.trailRel.shift();
   }
+
+  // Event-driven micro-lessons.
+  if (state.sun.inEclipse) triggerLesson("eclipse");
+  if (Number.isFinite(state.fuelBudget) && state.fuel < state.fuelBudget * 0.6) triggerLesson("fuel");
+  if (state.physTime > PHYS.periodSec && state.debris.dv < 0.02) triggerLesson("epicycle");
 
   const spin = Math.hypot(debris.omega, debris.omegaPitch, debris.omegaRoll);
   if (spin < 0.16) {
@@ -1112,6 +1299,7 @@ function update(dtWall) {
       state.phase = "REMOVE";
       messages.push({ text: "ATTITUDE LOCK", life: 1.4, color: "#68ffa6" });
       state.score += 1600 * (state.scoreMul || 1);
+      triggerLesson("lock");
     } else if (stability > 0.25 && state.phase === "DESPIN") {
       state.phase = "STABILIZE";
     } else if (stability <= 0.03 && state.phase === "STABILIZE") {
@@ -1119,30 +1307,44 @@ function update(dtWall) {
     }
   }
 
-  // Deorbit progress: only along-track (retrograde) Δv lowers the orbit. The
-  // win condition is the predicted perigee drop δr_p = δa − A reaching the
-  // per-pass disposal target — equivalently, the one-orbit ghost trajectory
-  // dipping below the disposal line in the Hill-frame map.
+  // Objective check. Default (free play / L2 / L3 / L5): perigee drop — only
+  // along-track (retrograde) Δv lowers the orbit; the win condition is
+  // δr_p = δa − A reaching the disposal target, equivalently the one-orbit
+  // ghost trajectory dipping below the disposal line in the Hill-frame map.
   const ro = orbitReadouts(rel);
   state.deltaA = ro.da;
   state.oscAmp = ro.amp;
   state.perigeeDelta = ro.perigeeDelta;
-  state.removalProgress = clamp(-ro.perigeeDelta / state.goalDp, 0, 1);
-  const reachedGoal = ro.perigeeDelta <= -state.goalDp;
-  if (!state.won && !state.failed && reachedGoal) {
-    if (state.phase === "REMOVE" && spin < 0.16 && stability >= 0.95) {
-      state.won = true;
-      state.phase = "CLEARED";
-      state.score += (4200 + Math.floor(state.energy * 1600)) * (state.scoreMul || 1);
-      messages.push({ text: "DEBRIS TRANSFER CONFIRMED", life: 4.2, color: "#48f3ff" });
-    } else {
-      // Orbit lowered to the disposal target while still tumbling → uncontrolled reentry.
-      state.failed = true;
-      state.phase = "FAILED";
-      state.failReason = spin >= 0.16
-        ? `回転を止め切れていません (${spin.toFixed(2)} rad/s)。タンブリングしたまま軌道を下げた — 制御不能な再突入でデブリは回収不能。`
-        : "姿勢が安定する前に軌道を下げ過ぎました — デブリは回収不能。";
-      messages.push({ text: "UNCONTROLLED REENTRY", life: 4.2, color: "#ff5268" });
+  const objective = state.level ? state.level.objective : "perigee";
+  if (objective === "despin") {
+    state.removalProgress = stability;
+    if (!state.won && !state.failed && stability >= 1 && spin < 0.16) {
+      winMission("ATTITUDE STABILIZED", "回転停止・姿勢ロック達成。捕獲可能状態。");
+    }
+  } else if (objective === "cross") {
+    const az = Math.hypot(rel.z, rel.vz / PHYS.n);
+    state.crossAz = az;
+    state.removalProgress = state.crossAz0 > state.level.goalAz
+      ? clamp((state.crossAz0 - az) / (state.crossAz0 - state.level.goalAz), 0, 1)
+      : 1;
+    if (!state.won && !state.failed && az < state.level.goalAz && spin < 0.16) {
+      winMission("RELATIVE MOTION NULLED", "クロストラック振動を抑え込んだ。編隊保持完了。");
+    }
+  } else {
+    state.removalProgress = clamp(-ro.perigeeDelta / state.goalDp, 0, 1);
+    const reachedGoal = ro.perigeeDelta <= -state.goalDp;
+    if (!state.won && !state.failed && reachedGoal) {
+      if (state.phase === "REMOVE" && spin < 0.16 && stability >= 0.95) {
+        winMission("DEBRIS TRANSFER CONFIRMED", "デブリを処分軌道へ送出。任務完了。");
+      } else {
+        // Orbit lowered to the disposal target while still tumbling → uncontrolled reentry.
+        state.failed = true;
+        state.phase = "FAILED";
+        state.failReason = spin >= 0.16
+          ? `回転を止め切れていません (${spin.toFixed(2)} rad/s)。タンブリングしたまま軌道を下げた — 制御不能な再突入でデブリは回収不能。`
+          : "姿勢が安定する前に軌道を下げ過ぎました — デブリは回収不能。";
+        messages.push({ text: "UNCONTROLLED REENTRY", life: 4.2, color: "#ff5268" });
+      }
     }
   }
 
@@ -1159,6 +1361,132 @@ function update(dtWall) {
     m.life -= dtGame;
     return m.life > 0;
   });
+}
+
+function winMission(text, lede) {
+  state.won = true;
+  state.phase = "CLEARED";
+  state.winTitle = text;
+  state.winLede = lede || "";
+  state.score += (4200 + Math.floor(state.energy * 1600)) * (state.scoreMul || 1);
+  messages.push({ text, life: 4.2, color: "#48f3ff" });
+  if (campaignIndex !== null && campaignIndex + 1 > campaignUnlocked) {
+    campaignUnlocked = campaignIndex + 1;
+    try { localStorage.setItem("labs-campaign", String(campaignUnlocked)); } catch (err) { /* private mode */ }
+  }
+}
+
+// Run rating (plan 3-2): Δv efficiency, beam accuracy, time vs par, resources.
+function computeRunRating() {
+  const objective = state.level ? state.level.objective : "perigee";
+  const eff = state.debris.dv > 0 ? Math.max(0, -state.dvSplit.v) / state.debris.dv : 0;
+  const acc = state.beamTime > 0 ? clamp(state.hitTime / state.beamTime, 0, 1) : 1;
+  const tf = clamp((state.par || 140) / Math.max(state.time, 1), 0, 1);
+  const fuelFrac = Number.isFinite(state.fuelBudget) ? clamp(state.fuel / state.fuelBudget, 0, 1) : 1;
+  const res = 0.5 * state.energy + 0.5 * fuelFrac;
+  // Δv efficiency only makes sense when the objective is to move the orbit.
+  const total = objective === "perigee"
+    ? eff * 0.35 + acc * 0.2 + tf * 0.25 + res * 0.2
+    : acc * 0.4 + tf * 0.4 + res * 0.2;
+  const rank = total >= 0.82 ? "S" : total >= 0.68 ? "A" : total >= 0.5 ? "B" : "C";
+  return { eff, acc, tf, res, total, rank, objective };
+}
+
+function bestKey() {
+  return campaignIndex !== null
+    ? `labs-best-${CAMPAIGN[campaignIndex].id}`
+    : `labs-best-${currentTargetType}-${currentDifficulty}-${currentMode}`;
+}
+
+function fmtDv(v) {
+  return Math.abs(v) >= 0.995 ? `${v.toFixed(2)} m/s` : `${(v * 1000).toFixed(0)} mm/s`;
+}
+
+// Post-mission debrief plot (plan 2-5): the whole run's R-V trajectory plus
+// the final one-orbit prediction, rendered into the overlay canvas.
+function drawDebriefTo(canvasEl) {
+  if (!canvasEl || !state) return;
+  const c = canvasEl.getContext("2d");
+  const W = canvasEl.width;
+  const H = canvasEl.height;
+  c.clearRect(0, 0, W, H);
+  const trail = state.trailRel.concat([{ x: state.rel.x, y: state.rel.y }]);
+  const pred = [];
+  for (let i = 0; i <= 72; i++) pred.push(cwPropagate(state.rel, (PHYS.periodSec * i) / 72));
+  let minX = 0, maxX = 0, minY = 0, maxY = 0;
+  const inc = (x, y) => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  };
+  trail.forEach((p) => inc(p.x, p.y));
+  pred.forEach((p) => inc(p.x, p.y));
+  const objective = state.level ? state.level.objective : "perigee";
+  if (objective === "perigee") inc(-state.goalDp, 0);
+  let rangeX = Math.max(maxX - minX, 40);
+  let rangeY = Math.max(maxY - minY, 40);
+  minX -= rangeX * 0.12; maxX += rangeX * 0.12;
+  minY -= rangeY * 0.08; maxY += rangeY * 0.08;
+  rangeX = maxX - minX;
+  rangeY = maxY - minY;
+  const s = Math.min((W - 16) / rangeY, (H - 16) / rangeX);
+  const px = (my) => W / 2 + (my - (minY + maxY) / 2) * s;
+  const py = (mx) => H / 2 - (mx - (minX + maxX) / 2) * s;
+
+  c.font = "700 10px ui-sans-serif, system-ui";
+  // reference orbit + disposal line
+  c.strokeStyle = "rgba(232, 251, 255, 0.3)";
+  c.setLineDash([2, 4]);
+  c.beginPath(); c.moveTo(0, py(0)); c.lineTo(W, py(0)); c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = "rgba(232, 251, 255, 0.5)";
+  c.textAlign = "left";
+  c.fillText("REF ORBIT", 4, py(0) - 3);
+  if (objective === "perigee") {
+    const reached = state.perigeeDelta <= -state.goalDp;
+    c.strokeStyle = reached ? "rgba(104, 255, 166, 0.8)" : "rgba(255, 209, 102, 0.7)";
+    c.setLineDash([6, 5]);
+    c.beginPath(); c.moveTo(0, py(-state.goalDp)); c.lineTo(W, py(-state.goalDp)); c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = reached ? "rgba(104, 255, 166, 0.9)" : "rgba(255, 209, 102, 0.9)";
+    c.fillText(`DISPOSAL −${fmtMeters(state.goalDp)}`, 4, py(-state.goalDp) - 3);
+  }
+  // trail
+  c.strokeStyle = "rgba(104, 255, 166, 0.75)";
+  c.lineWidth = 1.5;
+  c.beginPath();
+  trail.forEach((p, i) => { if (i === 0) c.moveTo(px(p.y), py(p.x)); else c.lineTo(px(p.y), py(p.x)); });
+  c.stroke();
+  // final prediction
+  c.strokeStyle = "rgba(72, 243, 255, 0.7)";
+  c.setLineDash([4, 4]);
+  c.lineWidth = 1.2;
+  c.beginPath();
+  pred.forEach((p, i) => { if (i === 0) c.moveTo(px(p.y), py(p.x)); else c.lineTo(px(p.y), py(p.x)); });
+  c.stroke();
+  c.setLineDash([]);
+  // start / end markers
+  const st = trail[0];
+  c.fillStyle = "#48f3ff";
+  c.beginPath(); c.arc(px(st.y), py(st.x), 3, 0, TAU); c.fill();
+  c.fillText("START", px(st.y) + 6, py(st.x) - 4);
+  c.fillStyle = "#ffd166";
+  c.beginPath(); c.arc(px(state.rel.y), py(state.rel.x), 3.4, 0, TAU); c.fill();
+  // axes hint
+  c.fillStyle = "rgba(140, 169, 173, 0.8)";
+  c.textAlign = "right";
+  c.fillText("+V → / ↑ +R", W - 6, H - 6);
+}
+
+function buildDebriefNotes() {
+  const sp = state.dvSplit;
+  const lines = [];
+  lines.push(`Σ逆行Δv ${fmtDv(-sp.v)} → δa = 2Δv_V/n = ${fmtMeters((2 * sp.v) / PHYS.n)}`);
+  lines.push(`近地点 δr_p = δa − A = ${fmtMeters(state.perigeeDelta)}  (δa ${fmtMeters(state.deltaA)} / A ${fmtMeters(state.oscAmp)})`);
+  lines.push(`漏れ成分 R ${fmtDv(sp.r)} / H ${fmtDv(sp.h)} — 軌道エネルギーには寄与しない`);
+  lines.push(`チェイサー燃料消費 ${fmtDv(state.chaser.dvUsed || 0)} = あなたが励起した相対運動の追従コスト`);
+  return lines.join("\n");
 }
 
 function drawBackground() {
@@ -1651,6 +1979,51 @@ function drawOrbitMap() {
     ctx.beginPath();
     ctx.arc(cx, cy, r, Math.PI - eHalf, Math.PI + eHalf);
     ctx.stroke();
+  }
+
+  // Orbit-element bridge (plan 2-3): the debris' osculating absolute orbit,
+  // with the altitude deviation exaggerated so the per-pass perigee change is
+  // visible at planet scale. Linearized: r(θ) ≈ r_ref + δa − A·cos(θ − θ_p).
+  // The dashed inner ring is the disposal perigee target — the amber ellipse
+  // dipping inside it is the same win condition as the Hill map's line.
+  {
+    const ph0 = state.orbit.phase;
+    const da = state.deltaA;
+    const amp = state.oscAmp;
+    const exag = (r * 0.16) / state.goalDp;
+    const devClamp = r * 0.32;
+    // Radial-oscillation phase: x = δa − A·cos(ψ), ẋ = A·n·sin(ψ).
+    const psi = amp > 1e-9 ? Math.atan2(state.rel.vx / PHYS.n, da - state.rel.x) : 0;
+    const thetaP = ph0 - psi;   // map angle of the debris' perigee
+    ctx.strokeStyle = "rgba(255, 120, 90, 0.45)";
+    ctx.setLineDash([2, 5]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(earthR + 3, r - exag * state.goalDp), 0, TAU);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(255, 209, 102, 0.8)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (let i = 0; i <= 56; i++) {
+      const th = (i / 56) * TAU;
+      const rho = r + clamp((da - amp * Math.cos(th - thetaP)) * exag, -devClamp, devClamp);
+      const ex = cx + Math.cos(th) * rho;
+      const ey = cy - Math.sin(th) * rho;
+      if (i === 0) ctx.moveTo(ex, ey);
+      else ctx.lineTo(ex, ey);
+    }
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    // Debris on its orbit (sinks below the green chaser dot as it descends).
+    const rhoSat = r + clamp(state.rel.x * exag, -devClamp, devClamp);
+    ctx.fillStyle = "#ffd166";
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(ph0) * rhoSat, cy - Math.sin(ph0) * rhoSat, 2.6, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255, 209, 102, 0.6)";
+    ctx.font = `700 ${Math.round(8.5 * scale)}px ui-sans-serif, system-ui`;
+    ctx.textAlign = "right";
+    ctx.fillText("DEBRIS ORBIT (alt ×exag)", x0 + size - 8, y0 + size - 18);
   }
 
   // Earth.
@@ -2448,14 +2821,16 @@ function drawDebris() {
     }
   }
 
-  // Internal "veins" — rock only.
+  // Internal "veins" — rock only. Anchor at the projected body centre (the
+  // raw debris.x/y are world-frame px, not screen coordinates).
   if (debris.kind === "debris") {
+    const bodyCenter = projectWorldPoint({ x: debris.x, y: debris.y, z: debris.z });
     ctx.strokeStyle = "rgba(255, 209, 102, 0.36)";
     ctx.lineWidth = 1.8;
     for (let i = 1; i < projected.length / 2; i += 3) {
       const b = projected[i];
       ctx.beginPath();
-      ctx.moveTo(debris.x, debris.y);
+      ctx.moveTo(bodyCenter.x, bodyCenter.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
     }
@@ -2641,6 +3016,13 @@ function updateHud() {
   }
 
   const lowFuel = Number.isFinite(state.fuelBudget) && state.fuel < state.fuelBudget * 0.25 && !state.won && !state.failed;
+  const lv = state.level;
+  const tag = lv ? `[${lv.id}] ` : "";
+  const removeGuidance = lv && lv.objective === "cross"
+    ? `${tag}横振動 Az ${Math.round(state.crossAz || 0)} m → < ${lv.goalAz} m — Hの動きと逆向きに押せ(タイミング)`
+    : lv && lv.objective === "despin"
+      ? `${tag}回転を止めて2秒ホールドでクリア`
+      : `${tag}正面(手前向き)の面を撃って後方(−V)へ押せ — PERIGEE ${fmtMeters(state.perigeeDelta)} → 目標 −${fmtMeters(state.goalDp)}`;
   ui.guidanceText.textContent = state.won
     ? "クリア:  R で再挑戦"
     : state.failed
@@ -2652,11 +3034,11 @@ function updateHud() {
         : state.sun.inEclipse
         ? "ECLIPSE — エネルギー再生停止中"
         : state.phase === "DESPIN"
-          ? `回転中: デブリの端を撃って減速 (${totalSpin.toFixed(2)} → < 0.16 rad/s)`
+          ? `${tag}回転中: デブリの端を撃って減速 (${totalSpin.toFixed(2)} → < 0.16 rad/s)`
           : state.phase === "STABILIZE"
-            ? `ホールド: 撃たずに姿勢維持 (STABILITY ${Math.round(stability * 100)}%)`
+            ? `${tag}ホールド: 撃たずに姿勢維持 (STABILITY ${Math.round(stability * 100)}%)`
             : state.phase === "REMOVE"
-              ? `正面(手前向き)の面を撃って後方(−V)へ押せ — PERIGEE ${fmtMeters(state.perigeeDelta)} → 目標 −${fmtMeters(state.goalDp)}`
+              ? removeGuidance
               : "HCW RELATIVE MODE";
 
   ui.stepDespin.classList.toggle("active", state.phase === "DESPIN");
@@ -2673,6 +3055,7 @@ function updateHud() {
 }
 
 function cycleTarget() {
+  campaignIndex = null;   // manual target choice exits the training program
   const i = TARGET_TYPES.indexOf(currentTargetType);
   currentTargetType = TARGET_TYPES[(i + 1) % TARGET_TYPES.length];
   resetGame();
@@ -2680,6 +3063,7 @@ function cycleTarget() {
 }
 
 function cycleDifficulty() {
+  campaignIndex = null;
   const i = DIFFICULTY_TYPES.indexOf(currentDifficulty);
   currentDifficulty = DIFFICULTY_TYPES[(i + 1) % DIFFICULTY_TYPES.length];
   resetGame();
@@ -2687,6 +3071,7 @@ function cycleDifficulty() {
 }
 
 function cycleMode() {
+  campaignIndex = null;
   const i = MODE_TYPES.indexOf(currentMode);
   currentMode = MODE_TYPES[(i + 1) % MODE_TYPES.length];
   resetGame();
@@ -2800,7 +3185,25 @@ if (ui.modeButton) ui.modeButton.addEventListener("click", cycleMode);
 
 function showIntroOverlay() {
   if (ui.introOverlay) ui.introOverlay.hidden = false;
+  refreshCampaignButtons();
   if (state) state.paused = true;
+}
+
+// Training-program level chips on the intro overlay; locked levels disabled.
+function refreshCampaignButtons() {
+  const holder = ui.campaignButtons;
+  if (!holder) return;
+  holder.innerHTML = "";
+  CAMPAIGN.forEach((lv, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    const locked = i > campaignUnlocked;
+    b.textContent = locked ? `🔒 ${lv.id}` : lv.id;
+    b.title = `${lv.title} — ${lv.brief}`;
+    b.disabled = locked;
+    b.addEventListener("click", () => startCampaignLevel(i));
+    holder.appendChild(b);
+  });
 }
 
 function hideIntroOverlay() {
@@ -2809,15 +3212,44 @@ function hideIntroOverlay() {
 }
 
 function showWinOverlay() {
-  if (!ui.winOverlay) return;
+  // The reveal is delayed by setTimeout — bail if the run was reset meanwhile.
+  if (!ui.winOverlay || !state || !state.won) return;
+  if (ui.winTitle && state.winTitle) ui.winTitle.textContent = state.winTitle;
   ui.winScore.textContent = String(Math.floor(state.score)).padStart(6, "0");
   ui.winEnergy.textContent = `${Math.round(state.energy * 100)}%`;
-  if (ui.winDv) ui.winDv.textContent = `${state.debris.dv.toFixed(2)} m/s`;
+  if (ui.winDv) ui.winDv.textContent = fmtDv(state.debris.dv);
   if (ui.winPerigee) ui.winPerigee.textContent = fmtMeters(state.perigeeDelta);
-  if (ui.winEff) {
-    const eff = state.debris.dv > 0 ? Math.max(0, -state.dvSplit.v) / state.debris.dv : 0;
-    ui.winEff.textContent = `${Math.round(eff * 100)}%`;
+  const rating = computeRunRating();
+  if (ui.winEff) ui.winEff.textContent = `${Math.round(rating.eff * 100)}%`;
+  if (ui.winRank && ui.winRankDetail) {
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    ui.winRank.textContent = rating.rank;
+    ui.winRank.style.color = rating.rank === "S" ? "#48f3ff" : rating.rank === "A" ? "#68ffa6" : rating.rank === "B" ? "#ffd166" : "#ff5268";
+    ui.winRankDetail.textContent = rating.objective === "perigee"
+      ? `Δv効率 ${pct(rating.eff)} · 命中 ${pct(rating.acc)} · 時間 ${pct(rating.tf)} · 資源 ${pct(rating.res)}`
+      : `命中 ${pct(rating.acc)} · 時間 ${pct(rating.tf)} · 資源 ${pct(rating.res)}`;
   }
+  // Personal best per (level | target+difficulty+mode), kept in localStorage.
+  if (ui.winBest) {
+    const key = bestKey();
+    let best = null;
+    try { best = JSON.parse(localStorage.getItem(key) || "null"); } catch (err) { /* ignore */ }
+    const sc = Math.floor(state.score);
+    if (!best || sc > best.score) {
+      try { localStorage.setItem(key, JSON.stringify({ score: sc, rank: rating.rank })); } catch (err) { /* ignore */ }
+      ui.winBest.textContent = best
+        ? `NEW RECORD!  (これまで ${String(best.score).padStart(6, "0")} · ${best.rank})`
+        : "NEW RECORD!";
+    } else {
+      ui.winBest.textContent = `BEST ${String(best.score).padStart(6, "0")} · ${best.rank}`;
+    }
+  }
+  if (ui.nextLevelButton) {
+    const hasNext = campaignIndex !== null && campaignIndex + 1 < CAMPAIGN.length;
+    ui.nextLevelButton.hidden = !hasNext;
+  }
+  if (ui.debriefNotes) ui.debriefNotes.textContent = buildDebriefNotes();
+  drawDebriefTo(ui.debriefCanvas);
   ui.winOverlay.hidden = false;
 }
 
@@ -2826,8 +3258,11 @@ function hideWinOverlay() {
 }
 
 function showFailOverlay() {
-  if (!ui.failOverlay) return;
+  if (!ui.failOverlay || !state || !state.failed) return;
   if (ui.failReason && state.failReason) ui.failReason.textContent = state.failReason;
+  if (ui.failDv) ui.failDv.textContent = fmtDv(state.debris.dv);
+  if (ui.failPerigee) ui.failPerigee.textContent = fmtMeters(state.perigeeDelta);
+  drawDebriefTo(ui.debriefCanvasFail);
   ui.failOverlay.hidden = false;
 }
 
@@ -2855,7 +3290,11 @@ function checkResultOverlays() {
 }
 
 if (ui.startButton) {
-  ui.startButton.addEventListener("click", hideIntroOverlay);
+  ui.startButton.addEventListener("click", () => {
+    campaignIndex = null;
+    resetGame();
+    hideIntroOverlay();
+  });
 }
 if (ui.retryButton) {
   ui.retryButton.addEventListener("click", () => {
@@ -2863,11 +3302,21 @@ if (ui.retryButton) {
     resetGame();
   });
 }
+if (ui.nextLevelButton) {
+  ui.nextLevelButton.addEventListener("click", () => {
+    if (campaignIndex !== null && campaignIndex + 1 < CAMPAIGN.length) {
+      startCampaignLevel(campaignIndex + 1);
+    }
+  });
+}
 if (ui.failRetryButton) {
   ui.failRetryButton.addEventListener("click", () => {
     hideFailOverlay();
     resetGame();
   });
+}
+if (ui.lessonClose) {
+  ui.lessonClose.addEventListener("click", hideLessonCard);
 }
 
 window.addEventListener("resize", resize);
@@ -2877,14 +3326,20 @@ window.addEventListener("resize", resize);
 window.LABS = {
   get state() { return state; },
   get mode() { return currentMode; },
+  get campaignIndex() { return campaignIndex; },
+  get campaignUnlocked() { return campaignUnlocked; },
   step(dtWall = 1 / 60) {
     update(dtWall);
     draw();
     updateHud();
     checkResultOverlays();
   },
+  startCampaignLevel,
+  triggerLesson,
+  computeRunRating,
   cwPropagate,
   orbitReadouts,
+  CAMPAIGN,
   PHYS,
   TIME_WARP
 };
